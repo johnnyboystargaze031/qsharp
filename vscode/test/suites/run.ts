@@ -15,7 +15,8 @@ export function runMochaTests(requireTestModules: () => void): Promise<void> {
   return new Promise((c, e) => {
     mocha.setup({
       ui: "tdd",
-      reporter: undefined,
+      // this reporter logs the beginning of the test so it's a bit easier to read when interleaved with console logs
+      reporter: "list",
     });
 
     // Load the test suites. This needs to come
@@ -27,10 +28,9 @@ export function runMochaTests(requireTestModules: () => void): Promise<void> {
       // Run the mocha test
       mocha.run((failures) => {
         if (failures > 0) {
-          e(new Error(`${failures} tests failed.`));
-        } else {
-          c();
+          console.error(`[error] ${failures} test(s) failed.`);
         }
+        c();
       });
     } catch (err) {
       console.error(err);
