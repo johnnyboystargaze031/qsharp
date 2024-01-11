@@ -113,5 +113,7 @@ suite("Q# Language Service Tests", () => {
 async function activate() {
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   const ext = vscode.extensions.getExtension("quantum.qsharp-lang-vscode-dev")!;
+  const start = performance.now();
   await ext.activate();
+  console.log(`🌸 Activated extension in ${performance.now() - start}ms`);
 }
