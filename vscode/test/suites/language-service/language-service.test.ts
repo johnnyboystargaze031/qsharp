@@ -3,8 +3,31 @@
 
 import * as vscode from "vscode";
 import { assert } from "chai";
+import { LogLevel } from "qsharp-lang";
 
-suite("Q# Language Service Tests", () => {
+suite("Q# Language Service Tests", function suite() {
+  async function activate() {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const ext = vscode.extensions.getExtension(
+      "quantum.qsharp-lang-vscode-dev",
+    )!;
+    const start = performance.now();
+    const extensionApi: {
+      setLogListener?: (
+        listener: (level: LogLevel, ...args: any) => void,
+      ) => void;
+    } = await ext.activate();
+
+    if (!extensionApi.setLogListener) {
+      console.log(`🌸 extension did not return a log listener`);
+    } else {
+      extensionApi.setLogListener((level, ...args) => {
+        console.log(`🌺 qsharp: [${level}] ${args.join(" ")}`);
+      });
+    }
+    console.log(`🌸 activate() completed in ${performance.now() - start}ms`);
+  }
+
   const workspaceFolder =
     vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
   assert(workspaceFolder, "Expecting an open folder");
@@ -109,11 +132,3 @@ suite("Q# Language Service Tests", () => {
     );
   });
 });
-
-async function activate() {
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-  const ext = vscode.extensions.getExtension("quantum.qsharp-lang-vscode-dev")!;
-  const start = performance.now();
-  await ext.activate();
-  console.log(`🌸 Activated extension in ${performance.now() - start}ms`);
-}

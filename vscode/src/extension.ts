@@ -3,6 +3,7 @@
 
 import {
   ILanguageService,
+  LogLevel,
   getLanguageService,
   getLibrarySourceContent,
   loadWasmModule,
@@ -42,8 +43,18 @@ import { activateTargetProfileStatusBarItem } from "./statusbar.js";
 import { initFileSystem } from "./memfs.js";
 import { getManifest, readFile, listDir } from "./projectSystem.js";
 
-export async function activate(context: vscode.ExtensionContext) {
-  initializeLogger();
+export async function activate(context: vscode.ExtensionContext): Promise<{
+  setLogListener?: (listener: (level: LogLevel, ...args: any) => void) => void;
+}> {
+  let setLogListener = undefined;
+  if (context.extensionMode === vscode.ExtensionMode.Test) {
+    setLogListener = initializePassThroughLogger();
+  } else {
+    initializeOutputLogger();
+  }
+
+  const start = performance.now();
+
   log.info("Q# extension activating.");
   initTelemetry(context);
 
@@ -62,19 +73,27 @@ export async function activate(context: vscode.ExtensionContext) {
     ...(await activateLanguageService(context.extensionUri)),
   );
 
+  log.debug(`performance checkpoint 1: ${performance.now() - start}ms`);
+
   context.subscriptions.push(...registerQSharpNotebookHandlers());
 
   initAzureWorkspaces(context);
   initCodegen(context);
   activateDebugger(context);
+
+  log.debug(`performance checkpoint 2: ${performance.now() - start}ms`);
   registerCreateNotebookCommand(context);
   registerWebViewCommands(context);
   initFileSystem(context);
 
+  log.debug(`performance checkpoint 3: ${performance.now() - start}ms`);
+
   log.info("Q# extension activated.");
+
+  return { setLogListener };
 }
 
-function initializeLogger() {
+function initializeOutputLogger() {
   const output = vscode.window.createOutputChannel("Q#", { log: true });
 
   // Override the global logger with functions that write to the output channel
@@ -106,6 +125,41 @@ function initializeLogger() {
   output.onDidChangeLogLevel((level) => {
     log.setLogLevel(mapLogLevel(level));
   });
+}
+
+function initializePassThroughLogger(): (
+  listener: (level: LogLevel, ...args: any[]) => void,
+) => void {
+  let listener: ((level: LogLevel, ...args: any[]) => void) | undefined =
+    undefined;
+  const buffered: [LogLevel, any[]][] = [];
+
+  const setListener = (
+    newListener: (level: LogLevel, ...args: any) => void,
+  ) => {
+    buffered.forEach(([level, args]) => newListener(level, args));
+    listener = newListener;
+  };
+
+  const passThroughLog = (level: LogLevel, ...args: any[]) => {
+    if (listener) {
+      listener(level, args);
+    } else {
+      // Buffer logs until a listener is hooked up
+      buffered.push([level, args]);
+    }
+  };
+
+  log.error = (...args) => passThroughLog("error", ...args);
+  log.warn = (...args) => passThroughLog("warn", ...args);
+  log.info = (...args) => passThroughLog("info", ...args);
+  log.debug = (...args) => passThroughLog("debug", ...args);
+  log.trace = (...args) => passThroughLog("trace", ...args);
+
+  // Collect all logs
+  log.setLogLevel("trace");
+
+  return setListener;
 }
 
 function registerDocumentUpdateHandlers(languageService: ILanguageService) {
