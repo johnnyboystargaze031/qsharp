@@ -138,6 +138,7 @@ function initializePassThroughLogger(): (
     newListener: (level: LogLevel, ...args: any) => void,
   ) => {
     buffered.forEach(([level, args]) => newListener(level, args));
+    buffered.length = 0;
     listener = newListener;
   };
 
