@@ -9,19 +9,17 @@ use num_bigint::BigUint;
 use num_complex::Complex64;
 use project_system::*;
 use qsc::{
-    compile::{self},
+    compile,
     hir::PackageId,
     interpret::{
+        self,
         output::{self, Receiver},
-        stateful::{
-            self,
-            re::{self, estimate_entry},
-        },
     },
     target::Profile,
     PackageStore, PackageType, SourceContents, SourceMap, SourceName, SparseSim,
 };
 use qsc_codegen::qir_base::generate_qir;
+use resource_estimator::{self as re, estimate_entry};
 use serde_json::json;
 use std::{fmt::Write, sync::Arc};
 use wasm_bindgen::prelude::*;
@@ -29,6 +27,7 @@ use wasm_bindgen::prelude::*;
 mod debug_service;
 mod diagnostic;
 mod language_service;
+mod line_column;
 mod logging;
 mod project_system;
 mod serializable_type;
@@ -104,7 +103,7 @@ fn _get_qir(sources: SourceMap) -> Result<String, String> {
 pub fn get_estimates(sources: Vec<js_sys::Array>, params: &str) -> Result<String, String> {
     let sources = get_source_map(sources, None);
 
-    let mut interpreter = stateful::Interpreter::new(
+    let mut interpreter = interpret::Interpreter::new(
         true,
         sources,
         PackageType::Exe,
@@ -113,7 +112,7 @@ pub fn get_estimates(sources: Vec<js_sys::Array>, params: &str) -> Result<String
     .map_err(|e| e[0].to_string())?;
 
     estimate_entry(&mut interpreter, params).map_err(|e| match &e[0] {
-        re::Error::Interpreter(stateful::Error::Eval(e)) => e.to_string(),
+        re::Error::Interpreter(interpret::Error::Eval(e)) => e.to_string(),
         re::Error::Interpreter(_) => unreachable!("interpreter errors should be eval errors"),
         re::Error::Estimation(e) => e.to_string(),
     })
@@ -204,7 +203,7 @@ where
     }
 }
 
-fn run_internal<F>(sources: SourceMap, event_cb: F, shots: u32) -> Result<(), Box<stateful::Error>>
+fn run_internal<F>(sources: SourceMap, event_cb: F, shots: u32) -> Result<(), Box<interpret::Error>>
 where
     F: FnMut(&str),
 {
@@ -215,7 +214,7 @@ where
         .expect("There must be a source to process")
         .to_string();
     let mut out = CallbackReceiver { event_cb };
-    let mut interpreter = match stateful::Interpreter::new(
+    let mut interpreter = match interpret::Interpreter::new(
         true,
         sources,
         PackageType::Exe,

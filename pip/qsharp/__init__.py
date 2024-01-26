@@ -4,10 +4,11 @@
 from ._qsharp import (
     init,
     eval,
-    eval_file,
     run,
     compile,
     estimate,
+    set_quantum_seed,
+    set_classical_seed,
     dump_machine,
 )
 
@@ -27,8 +28,9 @@ except NameError:
 __all__ = [
     "init",
     "eval",
-    "eval_file",
     "run",
+    "set_quantum_seed",
+    "set_classical_seed",
     "dump_machine",
     "compile",
     "estimate",

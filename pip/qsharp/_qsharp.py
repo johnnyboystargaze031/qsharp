@@ -120,18 +120,6 @@ def eval(source: str) -> Any:
     return get_interpreter().interpret(source, callback)
 
 
-def eval_file(path: str) -> Any:
-    """
-    Reads Q# source code from a file and evaluates it.
-    :param path: The path to the Q# source file.
-    :returns: The value returned by the last statement in the file.
-    :raises: QSharpError
-    """
-    from ._fs import read_file
-
-    return eval(read_file(path))
-
-
 class ShotResult(TypedDict):
     """
     A single result of a shot.
@@ -175,9 +163,9 @@ def run(
     for _ in range(shots):
         results.append({"result": None, "events": []})
         run_results = get_interpreter().run(
-            entry_expr, 1, on_save_events if save_events else print_output
+            entry_expr, on_save_events if save_events else print_output
         )
-        results[-1]["result"] = run_results[0]
+        results[-1]["result"] = run_results
         if on_result:
             on_result(results[-1])
 
@@ -257,6 +245,26 @@ def estimate(
         json.loads(get_interpreter().estimate(entry_expr, json.dumps(params)))
     )
 
+def set_quantum_seed(seed: Optional[int]) -> None:
+    """
+    Sets the seed for the random number generator used for quantum measurements.
+    This applies to all Q# code executed, compiled, or estimated.
+
+    :param seed: The seed to use for the quantum random number generator.
+        If None, the seed will be generated from entropy.
+    """
+    get_interpreter().set_quantum_seed(seed)
+
+def set_classical_seed(seed: Optional[int]) -> None:
+    """
+    Sets the seed for the random number generator used for standard
+    library classical random number operations.
+    This applies to all Q# code executed, compiled, or estimated.
+
+    :param seed: The seed to use for the classical random number generator.
+        If None, the seed will be generated from entropy.
+    """
+    get_interpreter().set_classical_seed(seed)
 
 def dump_machine() -> StateDump:
     """

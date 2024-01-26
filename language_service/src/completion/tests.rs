@@ -12,12 +12,15 @@ use crate::{
         compile_notebook_with_fake_stdlib_and_markers,
         compile_project_with_fake_stdlib_and_markers, compile_with_fake_stdlib_and_markers,
     },
+    Encoding,
 };
 use indoc::indoc;
 
 fn check(source_with_cursor: &str, completions_to_check: &[&str], expect: &Expect) {
-    let (compilation, cursor_offset, _) = compile_with_fake_stdlib_and_markers(source_with_cursor);
-    let actual_completions = get_completions(&compilation, "<source>", cursor_offset);
+    let (compilation, cursor_position, _) =
+        compile_with_fake_stdlib_and_markers(source_with_cursor);
+    let actual_completions =
+        get_completions(&compilation, "<source>", cursor_position, Encoding::Utf8);
     let checked_completions: Vec<Option<&CompletionItem>> = completions_to_check
         .iter()
         .map(|comp| {
@@ -36,9 +39,10 @@ fn check_project(
     completions_to_check: &[&str],
     expect: &Expect,
 ) {
-    let (compilation, cursor_uri, cursor_offset, _) =
+    let (compilation, cursor_uri, cursor_position, _) =
         compile_project_with_fake_stdlib_and_markers(sources_with_markers);
-    let actual_completions = get_completions(&compilation, &cursor_uri, cursor_offset);
+    let actual_completions =
+        get_completions(&compilation, &cursor_uri, cursor_position, Encoding::Utf8);
     let checked_completions: Vec<Option<&CompletionItem>> = completions_to_check
         .iter()
         .map(|comp| {
@@ -58,9 +62,10 @@ fn check_notebook(
     completions_to_check: &[&str],
     expect: &Expect,
 ) {
-    let (compilation, cell_uri, offset, _) =
+    let (compilation, cell_uri, cursor_position, _) =
         compile_notebook_with_fake_stdlib_and_markers(cells_with_markers);
-    let actual_completions = get_completions(&compilation, &cell_uri, offset);
+    let actual_completions =
+        get_completions(&compilation, &cell_uri, cursor_position, Encoding::Utf8);
     let checked_completions: Vec<Option<&CompletionItem>> = completions_to_check
         .iter()
         .map(|comp| {
@@ -92,6 +97,159 @@ fn assert_no_duplicates(mut actual_completions: CompletionList) {
     }
 
     assert!(dups.is_empty(), "duplicate completions found: {dups:#?}");
+}
+
+#[test]
+fn ignore_unstable_namespace() {
+    check(
+        r#"
+        namespace Test {
+            open ↘
+        }"#,
+        &["FakeStdLib", "Microsoft.Quantum.Unstable"],
+        &expect![[r#"
+            [
+                Some(
+                    CompletionItem {
+                        label: "FakeStdLib",
+                        kind: Module,
+                        sort_text: Some(
+                            "1101FakeStdLib",
+                        ),
+                        detail: None,
+                        additional_text_edits: None,
+                    },
+                ),
+                None,
+            ]
+        "#]],
+    );
+}
+
+#[test]
+fn ignore_unstable_callable() {
+    check(
+        r#"
+        namespace Test {
+            open Microsoft.Quantum.Unstable;
+            operation Foo() : Unit {
+                ↘
+            }
+        }"#,
+        &["Fake", "UnstableFake"],
+        &expect![[r#"
+            [
+                Some(
+                    CompletionItem {
+                        label: "Fake",
+                        kind: Function,
+                        sort_text: Some(
+                            "0700Fake",
+                        ),
+                        detail: Some(
+                            "operation Fake() : Unit",
+                        ),
+                        additional_text_edits: Some(
+                            [
+                                (
+                                    Range {
+                                        start: Position {
+                                            line: 2,
+                                            column: 12,
+                                        },
+                                        end: Position {
+                                            line: 2,
+                                            column: 12,
+                                        },
+                                    },
+                                    "open FakeStdLib;\n            ",
+                                ),
+                            ],
+                        ),
+                    },
+                ),
+                None,
+            ]
+        "#]],
+    );
+}
+
+#[test]
+fn ignore_internal_callable() {
+    check(
+        r#"
+        namespace Test {
+            internal operation Foo() : Unit {}
+            operation Bar() : Unit {
+                ↘
+            }
+        }
+
+        namespace Test {
+            internal operation Baz() : Unit {}
+        }"#,
+        &["Fake", "Foo", "Baz", "Hidden"],
+        &expect![[r#"
+            [
+                Some(
+                    CompletionItem {
+                        label: "Fake",
+                        kind: Function,
+                        sort_text: Some(
+                            "0700Fake",
+                        ),
+                        detail: Some(
+                            "operation Fake() : Unit",
+                        ),
+                        additional_text_edits: Some(
+                            [
+                                (
+                                    Range {
+                                        start: Position {
+                                            line: 2,
+                                            column: 12,
+                                        },
+                                        end: Position {
+                                            line: 2,
+                                            column: 12,
+                                        },
+                                    },
+                                    "open FakeStdLib;\n            ",
+                                ),
+                            ],
+                        ),
+                    },
+                ),
+                Some(
+                    CompletionItem {
+                        label: "Foo",
+                        kind: Function,
+                        sort_text: Some(
+                            "0600Foo",
+                        ),
+                        detail: Some(
+                            "operation Foo() : Unit",
+                        ),
+                        additional_text_edits: None,
+                    },
+                ),
+                Some(
+                    CompletionItem {
+                        label: "Baz",
+                        kind: Function,
+                        sort_text: Some(
+                            "0600Baz",
+                        ),
+                        detail: Some(
+                            "operation Baz() : Unit",
+                        ),
+                        additional_text_edits: None,
+                    },
+                ),
+                None,
+            ]
+        "#]],
+    );
 }
 
 #[test]
@@ -151,6 +309,7 @@ fn in_block_contains_std_functions_from_open_namespace() {
     );
 }
 
+#[allow(clippy::too_many_lines)]
 #[test]
 fn in_block_contains_std_functions() {
     check(
@@ -176,9 +335,15 @@ fn in_block_contains_std_functions() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 21,
-                                        end: 21,
+                                    Range {
+                                        start: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
                                     },
                                     "open FakeStdLib;\n    ",
                                 ),
@@ -199,9 +364,15 @@ fn in_block_contains_std_functions() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 21,
-                                        end: 21,
+                                    Range {
+                                        start: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
                                     },
                                     "open FakeStdLib;\n    ",
                                 ),
@@ -222,9 +393,15 @@ fn in_block_contains_std_functions() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 21,
-                                        end: 21,
+                                    Range {
+                                        start: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
                                     },
                                     "open FakeStdLib;\n    ",
                                 ),
@@ -390,9 +567,15 @@ fn in_block_from_other_namespace() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 21,
-                                        end: 21,
+                                    Range {
+                                        start: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
                                     },
                                     "open Other;\n    ",
                                 ),
@@ -436,9 +619,15 @@ fn auto_open_multiple_files() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 16,
-                                        end: 16,
+                                    Range {
+                                        start: Position {
+                                            line: 0,
+                                            column: 16,
+                                        },
+                                        end: Position {
+                                            line: 0,
+                                            column: 16,
+                                        },
                                     },
                                     "open Foo;\n ",
                                 ),
@@ -609,9 +798,15 @@ fn stdlib_udt() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 21,
-                                        end: 21,
+                                    Range {
+                                        start: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 4,
+                                        },
                                     },
                                     "open FakeStdLib;\n    ",
                                 ),
@@ -682,9 +877,15 @@ fn notebook_top_level() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 0,
-                                        end: 0,
+                                    Range {
+                                        start: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
+                                        end: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
                                     },
                                     "open FakeStdLib;\n",
                                 ),
@@ -722,9 +923,15 @@ fn notebook_top_level_global() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 0,
-                                        end: 0,
+                                    Range {
+                                        start: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
+                                        end: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
                                     },
                                     "open FakeStdLib;\n",
                                 ),
@@ -795,9 +1002,15 @@ fn notebook_block() {
                         additional_text_edits: Some(
                             [
                                 (
-                                    Span {
-                                        start: 0,
-                                        end: 0,
+                                    Range {
+                                        start: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
+                                        end: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
                                     },
                                     "open FakeStdLib;\n",
                                 ),
@@ -814,6 +1027,94 @@ fn notebook_block() {
                         ),
                         detail: None,
                         additional_text_edits: None,
+                    },
+                ),
+            ]
+        "#]],
+    );
+}
+
+#[test]
+fn notebook_auto_open_start_of_cell_empty() {
+    check_notebook(
+        &[
+            ("cell1", "namespace Foo { operation Bar() : Unit {} }"),
+            ("cell2", "↘"),
+        ],
+        &["Fake"],
+        &expect![[r#"
+            [
+                Some(
+                    CompletionItem {
+                        label: "Fake",
+                        kind: Function,
+                        sort_text: Some(
+                            "0800Fake",
+                        ),
+                        detail: Some(
+                            "operation Fake() : Unit",
+                        ),
+                        additional_text_edits: Some(
+                            [
+                                (
+                                    Range {
+                                        start: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
+                                        end: Position {
+                                            line: 0,
+                                            column: 0,
+                                        },
+                                    },
+                                    "open FakeStdLib;\n",
+                                ),
+                            ],
+                        ),
+                    },
+                ),
+            ]
+        "#]],
+    );
+}
+
+#[test]
+fn notebook_auto_open_start_of_cell() {
+    check_notebook(
+        &[
+            ("cell1", "namespace Foo { operation Bar() : Unit {} }"),
+            ("cell2", r#"   Message("hi") ↘"#),
+        ],
+        &["Fake"],
+        &expect![[r#"
+            [
+                Some(
+                    CompletionItem {
+                        label: "Fake",
+                        kind: Function,
+                        sort_text: Some(
+                            "0800Fake",
+                        ),
+                        detail: Some(
+                            "operation Fake() : Unit",
+                        ),
+                        additional_text_edits: Some(
+                            [
+                                (
+                                    Range {
+                                        start: Position {
+                                            line: 0,
+                                            column: 3,
+                                        },
+                                        end: Position {
+                                            line: 0,
+                                            column: 3,
+                                        },
+                                    },
+                                    "open FakeStdLib;\n   ",
+                                ),
+                            ],
+                        ),
                     },
                 ),
             ]
