@@ -15,6 +15,7 @@ pub use qsc_eval::{
     val::Value,
     StepAction, StepResult,
 };
+use qsc_vis::vis::BaseProfVisSim;
 
 use crate::{
     error::{self, WithStack},
@@ -278,6 +279,20 @@ impl Interpreter {
         }
 
         let mut sim = BaseProfSim::new();
+        let mut stdout = std::io::sink();
+        let mut out = GenericReceiver::new(&mut stdout);
+
+        let val = self.run_with_sim(&mut sim, &mut out, expr)??;
+
+        Ok(sim.finish(&val))
+    }
+
+    pub fn circuit_vis(&mut self, expr: &str) -> Result<String, Vec<Error>> {
+        if self.capabilities != RuntimeCapabilityFlags::empty() {
+            return Err(vec![Error::UnsupportedRuntimeCapabilities]);
+        }
+
+        let mut sim = BaseProfVisSim::new();
         let mut stdout = std::io::sink();
         let mut out = GenericReceiver::new(&mut stdout);
 

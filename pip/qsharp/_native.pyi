@@ -56,9 +56,7 @@ class Interpreter:
         :raises QSharpError: If there is an error interpreting the input.
         """
         ...
-    def run(
-        self, entry_expr: str, output_fn: Callable[[Output], None]
-    ) -> Any:
+    def run(self, entry_expr: str, output_fn: Callable[[Output], None]) -> Any:
         """
         Runs the given Q# expression with an independent instance of the simulator.
 
@@ -77,6 +75,15 @@ class Interpreter:
         :param entry_expr: The entry expression.
 
         :returns qir: The QIR string.
+        """
+        ...
+    def vis(self, entry_expr: str) -> str:
+        """
+        Generates a circuit diagram from Q# source code.
+
+        :param entry_expr: The entry expression.
+
+        :returns qir: The circuit diagram data.
         """
         ...
     def estimate(self, entry_expr: str, params: str) -> str:

@@ -197,6 +197,13 @@ impl Interpreter {
         }
     }
 
+    fn vis(&mut self, _py: Python, entry_expr: &str) -> PyResult<String> {
+        match self.interpreter.circuit_vis(entry_expr) {
+            Ok(qir) => Ok(qir),
+            Err(errors) => Err(QSharpError::new_err(format_errors(errors))),
+        }
+    }
+
     fn estimate(&mut self, _py: Python, entry_expr: &str, job_params: &str) -> PyResult<String> {
         match estimate_expr(&mut self.interpreter, entry_expr, job_params) {
             Ok(estimate) => Ok(estimate),

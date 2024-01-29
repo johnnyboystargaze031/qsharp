@@ -221,6 +221,18 @@ def compile(entry_expr: str) -> QirInputData:
     return QirInputData("main", ll_str)
 
 
+def circuit(entry_expr: str) -> str:
+    """
+    Returns circuit diagram for a program
+
+    :param entry_expr: The Q# expression that will be used as the entrypoint
+        for the program.
+
+    :returns str: The diagram data.
+    """
+    return json.loads(get_interpreter().vis(entry_expr))
+
+
 def estimate(
     entry_expr, params: Optional[Union[Dict[str, Any], List, EstimatorParams]] = None
 ) -> EstimatorResult:
@@ -245,6 +257,7 @@ def estimate(
         json.loads(get_interpreter().estimate(entry_expr, json.dumps(params)))
     )
 
+
 def set_quantum_seed(seed: Optional[int]) -> None:
     """
     Sets the seed for the random number generator used for quantum measurements.
@@ -254,6 +267,7 @@ def set_quantum_seed(seed: Optional[int]) -> None:
         If None, the seed will be generated from entropy.
     """
     get_interpreter().set_quantum_seed(seed)
+
 
 def set_classical_seed(seed: Optional[int]) -> None:
     """
@@ -265,6 +279,7 @@ def set_classical_seed(seed: Optional[int]) -> None:
         If None, the seed will be generated from entropy.
     """
     get_interpreter().set_classical_seed(seed)
+
 
 def dump_machine() -> StateDump:
     """
