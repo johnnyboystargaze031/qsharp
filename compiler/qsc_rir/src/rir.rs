@@ -18,13 +18,15 @@ pub struct CallableId(u32);
 #[derive(Clone, Debug)]
 pub struct Callable {
     /// The callable ID.
+    // CONSIDER: We probably don't need ID.
     pub id: CallableId,
     /// The span.
+    // CONSIDER: We probably don't need spans.
     pub span: Span,
     /// The name of the callable.
-    pub name: Ident,
+    pub name: Rc<str>,
     /// The input to the callable.
-    pub input: Pat,
+    pub input: Vec<(Ty, Ident)>,
     /// The return type of the callable.
     pub output: Ty,
     /// The callable body.
@@ -35,6 +37,7 @@ pub struct Callable {
 // A block.
 #[derive(Clone, Debug)]
 pub struct Block {
+    // CONSIDER: If we don't need spans, this struct might not be needed.
     pub span: Span,
     pub stmts: Vec<StmtKind>,
 }
@@ -48,11 +51,20 @@ pub struct Stmt {
     pub kind: StmtKind,
 }
 
+// CONSIDER: This can be equivalent to an instruction.
+pub struct Instruction {
+    pub ident: Option<Ident>,
+    pub kind: InstructionKind,
+}
+
+pub enum InstructionKind {}
+
 // A statement kind.
 #[derive(Clone, Debug)]
 pub enum StmtKind {
-    Binding(Pat, Expr),
+    Binding(Ident, Expr),
     Expr(Expr),
+    Branch(Condition, Block, Block),
 }
 
 #[derive(Clone, Debug)]
@@ -66,28 +78,15 @@ pub struct Expr {
 }
 
 #[derive(Clone, Debug)]
+pub struct Condition {
+    // CONSIDER: This could be just an ident if conditions are simplified to single boolean checks.
+}
+
+#[derive(Clone, Debug)]
 pub enum ExprKind {
-    Call(CallableId, Box<Expr>),
-}
-
-/// A pattern.
-#[derive(Clone, Debug)]
-pub struct Pat {
-    /// The span.
-    pub span: Span,
-    /// The pattern type.
-    pub ty: Ty,
-    /// The pattern kind.
-    pub kind: PatKind,
-}
-
-/// A pattern kind.
-#[derive(Clone, Debug)]
-pub enum PatKind {
-    /// A binding.
-    Bind(Ident),
-    /// A tuple: `(a, b, c)`.
-    Tuple(Vec<Pat>),
+    Literal,
+    Ident(Ident),
+    Call(CallableId, Vec<Expr>),
 }
 
 /// An identifier.
@@ -99,18 +98,9 @@ pub struct Ident {
     pub name: Rc<str>,
 }
 
-// A type.
-#[derive(Clone, Debug)]
-pub enum Ty {
-    /// A primitive type.
-    Prim(Prim),
-    /// A tuple type.
-    Tuple(Vec<Ty>),
-}
-
-/// A primitive type.
+/// A type.
 #[derive(Clone, Copy, Debug)]
-pub enum Prim {
+pub enum Ty {
     /// The boolean type.
     Bool,
     /// The floating-point type.
