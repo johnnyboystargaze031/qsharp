@@ -16,6 +16,8 @@ mod stmt;
 mod tests;
 mod ty;
 
+pub use lex::formatter::{self};
+
 use lex::TokenKind;
 use miette::Diagnostic;
 use qsc_ast::ast::{Expr, Namespace, TopLevelNode};
