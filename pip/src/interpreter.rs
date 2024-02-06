@@ -21,7 +21,7 @@ use qsc::{
     interpret::{
         self,
         output::{Error, Receiver},
-        Value,
+        Circuit, Value,
     },
     project::{FileSystem, Manifest, ManifestDescriptor},
     target::Profile,
@@ -197,9 +197,9 @@ impl Interpreter {
         }
     }
 
-    fn vis(&mut self, _py: Python, entry_expr: &str) -> PyResult<String> {
-        match self.interpreter.circuit_vis(entry_expr) {
-            Ok(qir) => Ok(qir),
+    fn circuit(&mut self, py: Python, entry_expr: &str, high_level: bool) -> PyResult<PyObject> {
+        match self.interpreter.circuit(high_level, Some(entry_expr)) {
+            Ok(circuit) => Ok(PyCircuit(circuit).into_py(py)),
             Err(errors) => Err(QSharpError::new_err(format_errors(errors))),
         }
     }
@@ -229,6 +229,72 @@ impl Interpreter {
                     .join("\n"),
             )),
         }
+    }
+}
+
+struct PyCircuit(Circuit);
+
+impl IntoPy<PyObject> for PyCircuit {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        let dict = PyDict::new(py);
+        let _ = dict.set_item(
+            "operations",
+            PyList::new(
+                py,
+                self.0.operations.into_iter().map(|g| {
+                    let gate = PyDict::new(py);
+                    let _ = gate.set_item("gate", g.gate);
+                    let _ = gate.set_item("displayArgs", g.display_args);
+                    let _ = gate.set_item("isControlled", g.is_controlled);
+                    let _ = gate.set_item("isAdjoint", g.is_adjoint);
+                    let _ = gate.set_item("isMeasurement", g.is_measurement);
+                    let _ = gate.set_item(
+                        "controls",
+                        PyList::new(
+                            py,
+                            g.controls.into_iter().map(|r| {
+                                let register = PyDict::new(py);
+                                let _ = register.set_item("qId", r.q_id);
+                                let _ = register.set_item("type", r.r#type);
+                                if let Some(c_id) = r.c_id {
+                                    let _ = register.set_item("cId", c_id);
+                                }
+                                register
+                            }),
+                        ),
+                    );
+                    let _ = gate.set_item(
+                        "targets",
+                        PyList::new(
+                            py,
+                            g.targets.into_iter().map(|r| {
+                                let register = PyDict::new(py);
+                                let _ = register.set_item("qId", r.q_id);
+                                let _ = register.set_item("type", r.r#type);
+                                if let Some(c_id) = r.c_id {
+                                    let _ = register.set_item("cId", c_id);
+                                }
+                                register
+                            }),
+                        ),
+                    );
+                    gate
+                }),
+            ),
+        );
+        let _ = dict.set_item(
+            "qubits",
+            PyList::new(
+                py,
+                self.0.qubits.into_iter().map(|q| {
+                    let qubit = PyDict::new(py);
+                    let _ = qubit.set_item("id", q.id);
+                    let _ = qubit.set_item("numChildren", q.num_children);
+                    qubit
+                }),
+            ),
+        );
+        dict.into_py(py)
     }
 }
 

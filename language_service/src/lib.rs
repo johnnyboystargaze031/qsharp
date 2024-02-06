@@ -4,6 +4,7 @@
 #![warn(clippy::mod_module_files, clippy::pedantic, clippy::unwrap_used)]
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
+pub mod code_lens;
 mod compilation;
 pub mod completion;
 pub mod definition;
@@ -27,7 +28,7 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures_util::StreamExt;
 use log::{trace, warn};
 use protocol::{
-    CompletionList, DiagnosticUpdate, Hover, Location, NotebookMetadata, SignatureHelp,
+    CodeLens, CompletionList, DiagnosticUpdate, Hover, Location, NotebookMetadata, SignatureHelp,
     WorkspaceConfigurationUpdate,
 };
 use qsc::line_column::{Encoding, Position, Range};
@@ -203,12 +204,12 @@ impl LanguageService {
         include_declaration: bool,
     ) -> Vec<Location> {
         self.document_op(
-            |position_encoding, compilation, uri, position| {
+            |compilation, uri, position, position_encoding| {
                 references::get_references(
-                    position_encoding,
                     compilation,
                     uri,
                     position,
+                    position_encoding,
                     include_declaration,
                 )
             },
@@ -245,6 +246,19 @@ impl LanguageService {
     #[must_use]
     pub fn prepare_rename(&self, uri: &str, position: Position) -> Option<(Range, String)> {
         self.document_op(rename::prepare_rename, "prepare_rename", uri, position)
+    }
+
+    /// LSP: textDocument/codeLens
+    #[must_use]
+    pub fn get_code_lenses(&self, uri: &str) -> Vec<CodeLens> {
+        self.document_op(
+            |compilation, uri, _, position_encoding| {
+                code_lens::get_code_lenses(compilation, uri, position_encoding)
+            },
+            "get_code_lenses",
+            uri,
+            Position::from_utf8_byte_offset(Encoding::Utf16, "", 0),
+        )
     }
 
     /// Executes an operation that takes a document uri and offset, using the current compilation for that document.

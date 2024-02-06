@@ -221,16 +221,17 @@ def compile(entry_expr: str) -> QirInputData:
     return QirInputData("main", ll_str)
 
 
-def circuit(entry_expr: str) -> str:
+def circuit(entry_expr: str, high_level: bool) -> dict:
     """
     Returns circuit diagram for a program
 
     :param entry_expr: The Q# expression that will be used as the entrypoint
         for the program.
+    :param high_level: Generate the high-level circuit instead of the hardware-specific one.
 
-    :returns str: The diagram data.
+    :returns dict: A dictionary representation of the circuit.
     """
-    return json.loads(get_interpreter().vis(entry_expr))
+    return get_interpreter().circuit(entry_expr, high_level)
 
 
 def estimate(

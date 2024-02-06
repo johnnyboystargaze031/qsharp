@@ -119,6 +119,25 @@ pub fn get_estimates(sources: Vec<js_sys::Array>, params: &str) -> Result<String
 }
 
 #[wasm_bindgen]
+pub fn get_circuit(
+    sources: Vec<js_sys::Array>,
+    entry: Option<String>,
+    high_level: bool,
+) -> Result<String, String> {
+    let sources = get_source_map(sources, entry);
+
+    let mut interpreter =
+        interpret::Interpreter::new(true, sources, PackageType::Exe, Profile::Base.into())
+            .map_err(|e| e[0].to_string())?;
+
+    let circuit = interpreter
+        .circuit(high_level, None)
+        .map_err(|e| e.into_iter().map(|e| e.to_string()).collect::<String>())?;
+
+    serde_json::to_string(&circuit).map_err(|e| e.to_string())
+}
+
+#[wasm_bindgen]
 pub fn get_library_source_content(name: &str) -> Option<String> {
     STORE_CORE_STD.with(|(store, std)| {
         for id in [PackageId::CORE, *std] {

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { TelemetryEvent, log } from "./log.js";
+import { LogEvent, TelemetryEvent, log } from "./log.js";
 import { CancellationToken } from "./cancellation.js";
 
 /**
@@ -202,6 +202,11 @@ export function createProxy<
       if (msg.type === "telemetry-event") {
         const detail = msg.detail as TelemetryEvent;
         log.logTelemetry(detail);
+        return;
+      }
+      if (msg.type === "log-event") {
+        const detail = msg.detail as LogEvent;
+        log.logWithLevel(detail.level, detail.target, ...detail.data);
         return;
       }
       const event = new Event(msg.type) as Event & TServiceEventMsg;

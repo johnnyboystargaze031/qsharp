@@ -1063,6 +1063,8 @@ dependencies = [
  "qsc_frontend",
  "qsc_hir",
  "qsc_passes",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

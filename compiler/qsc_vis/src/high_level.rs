@@ -4,7 +4,7 @@
 #[cfg(test)]
 mod tests;
 
-use indoc::writedoc;
+use crate::circuit::{Circuit, Gate, Register};
 use num_bigint::BigUint;
 use num_complex::Complex;
 use qsc_data_structures::index_map::IndexMap;
@@ -14,17 +14,17 @@ use qsc_eval::{
     eval,
     output::GenericReceiver,
     val::Value,
-    Env, Error,
+    Env,
 };
 use qsc_fir::fir;
 use qsc_frontend::compile::PackageStore;
 use qsc_hir::hir::{self};
-use std::fmt::{Display, Write};
+use std::fmt::Display;
 
 pub fn generate_circuit(
     store: &PackageStore,
     package: hir::PackageId,
-) -> std::result::Result<String, (Error, Vec<Frame>)> {
+) -> std::result::Result<Circuit, Error> {
     let mut fir_lowerer = qsc_eval::lower::Lowerer::new();
     let mut fir_store = fir::PackageStore::new();
     for (id, unit) in store {
@@ -38,7 +38,7 @@ pub fn generate_circuit(
     let unit = fir_store.get(package).expect("store should have package");
     let entry_expr = unit.entry.expect("package should have entry");
 
-    let mut sim = BaseProfVisSim::default();
+    let mut sim = CircuitSim::new(store);
     let mut stdout = std::io::sink();
     let mut out = GenericReceiver::new(&mut stdout);
     let result = eval(
@@ -52,51 +52,46 @@ pub fn generate_circuit(
     );
     match result {
         Ok(val) => Ok(sim.finish(&val)),
-        Err((err, stack)) => Err((err, stack)),
+        Err((err, stack)) => Err(Error::Eval(err, stack)),
     }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    Eval(qsc_eval::Error, Vec<Frame>),
+    Serialize(serde_json::Error),
 }
 
 #[derive(Copy, Clone, Default)]
 struct HardwareId(usize);
 
-pub struct BaseProfVisSim {
+pub struct CircuitSim<'a> {
+    #[allow(dead_code)]
+    package_store: &'a PackageStore,
     next_meas_id: usize,
     next_qubit_id: usize,
     next_qubit_hardware_id: HardwareId,
     qubit_map: IndexMap<usize, HardwareId>,
-    instrs: String,
+    circuit: Circuit,
     measurements: Vec<(Qubit, Result)>,
 }
 
-impl Default for BaseProfVisSim {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BaseProfVisSim {
+impl<'a> CircuitSim<'a> {
     #[must_use]
-    pub fn new() -> Self {
-        let mut sim = BaseProfVisSim {
+    pub fn new(package_store: &'a PackageStore) -> Self {
+        CircuitSim {
             next_meas_id: 0,
             next_qubit_id: 0,
             next_qubit_hardware_id: HardwareId::default(),
             qubit_map: IndexMap::new(),
-            instrs: String::new(),
+            circuit: Circuit::default(),
             measurements: Vec::new(),
-        };
-        let _ = writedoc!(
-            sim.instrs,
-            r#"
-            {{
-                "operations": [
-        "#
-        );
-        sim
+            package_store,
+        }
     }
 
     #[must_use]
-    pub fn finish(mut self, _val: &Value) -> String {
+    pub fn finish(mut self, _val: &Value) -> Circuit {
         let by_qubit = self.measurements.iter().fold(
             IndexMap::default(),
             |mut map: IndexMap<usize, Vec<Result>>, (q, r)| {
@@ -112,53 +107,22 @@ impl BaseProfVisSim {
         for (qubit, results) in &by_qubit {
             let mut i = 0;
             for _result in results {
-                self.instrs.push_str(&format_measurement_gate(qubit, i));
+                self.circuit.operations.push(measurement_gate(qubit, i));
                 i += 0;
             }
         }
 
-        if let Some(i) = self.instrs.rfind(',') {
-            self.instrs.truncate(i);
-        }
-
-        let _ = writedoc!(
-            self.instrs,
-            r#"
-                    ],
-            "#
-        );
-
-        self.instrs.push_str(r#"    "qubits": ["#);
-
-        let q_start = self.instrs.len();
+        // qubits
 
         for i in 0..self.next_qubit_hardware_id.0 {
             let num_measurements = self.measurements.iter().filter(|m| m.0 .0 .0 == i).count();
-            let _ = writeln!(
-                self.instrs,
-                r#"
-        {{
-            "id": {i},
-            "numChildren": {num_measurements}
-        }},"#
-            );
+            self.circuit.qubits.push(crate::circuit::Qubit {
+                id: i,
+                num_children: num_measurements,
+            });
         }
 
-        if let Some(i) = self.instrs.rfind(',') {
-            if i > q_start {
-                self.instrs.truncate(i);
-            }
-        }
-
-        let _ = writedoc!(
-            self.instrs,
-            r#"
-                    ]
-                }}
-            "#
-        );
-
-        self.instrs
+        self.circuit
     }
 
     #[must_use]
@@ -180,30 +144,53 @@ impl BaseProfVisSim {
     }
 }
 
-fn format_gate<const N: usize>(name: &str, targets: [Qubit; N]) -> String {
+fn gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Gate {
     // {
     //     "gate": "H",
     //     "targets": [{ "qId": 0 }],
     // }
-    let mut s = String::new();
-    let _ = write!(
-        s,
-        r#"
-        {{
-            "gate": "{name}",
-            "targets": [{}]
-        }},
-    "#,
-        format_list(targets)
-    );
-    s
+    Gate {
+        gate: name.into(),
+        display_args: None,
+        is_controlled: false,
+        is_adjoint: false,
+        is_measurement: false,
+        controls: vec![],
+        targets: targets
+            .iter()
+            .map(|q| Register {
+                r#type: 0,
+                q_id: q.0 .0,
+                c_id: None,
+            })
+            .collect(),
+    }
 }
 
-fn format_controlled_gate<const M: usize, const N: usize>(
+fn adjoint_gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Gate {
+    Gate {
+        gate: name.into(),
+        display_args: None,
+        is_controlled: false,
+        is_adjoint: true,
+        is_measurement: false,
+        controls: vec![],
+        targets: targets
+            .iter()
+            .map(|q| Register {
+                r#type: 0,
+                q_id: q.0 .0,
+                c_id: None,
+            })
+            .collect(),
+    }
+}
+
+fn controlled_gate<const M: usize, const N: usize>(
     name: &str,
     controls: [Qubit; M],
     targets: [Qubit; N],
-) -> String {
+) -> Gate {
     // {
     //     "gate": "X",
     //     "isControlled": "True",
@@ -211,65 +198,78 @@ fn format_controlled_gate<const M: usize, const N: usize>(
     //     "targets": [{ "qId": 1 }],
     // }
 
-    let mut s = String::new();
-    let _ = write!(
-        s,
-        r#"
-        {{
-            "gate": "{name}",
-            "isControlled": "True",
-            "controls": [{}],
-            "targets": [{}]
-        }},
-    "#,
-        format_list(controls),
-        format_list(targets)
-    );
-    s
+    Gate {
+        gate: name.into(),
+        display_args: None,
+        is_controlled: true,
+        is_adjoint: false,
+        is_measurement: false,
+        controls: controls
+            .iter()
+            .map(|q| Register {
+                r#type: 0,
+                q_id: q.0 .0,
+                c_id: None,
+            })
+            .collect(),
+        targets: targets
+            .iter()
+            .map(|q| Register {
+                r#type: 0,
+                q_id: q.0 .0,
+                c_id: None,
+            })
+            .collect(),
+    }
 }
 
-fn format_measurement_gate(qubit: usize, result: usize) -> String {
+fn measurement_gate(qubit: usize, result: usize) -> Gate {
     // {
     //     "gate": "Measure",
     //     "isMeasurement": "True",
     //     "controls": [{ "qId": 1 }],
     //     "targets": [{ "type": 1, "qId": 1, "cId": 0 }],
     // }
-    let mut s = String::new();
-    let _ = write!(
-        s,
-        r#"
-        {{
-            "gate": "Measure",
-            "isMeasurement": "True",
-            "controls": [{{ "qId": {qubit} }}],
-            "targets": [{{ "type": 1, "qId": {qubit}, "cId": {result} }}]
-        }},
-    "#,
-    );
-    s
-}
 
-fn format_rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N]) -> String {
-    let mut s = String::new();
-    let _ = writeln!(s, "  {name}({theta},{})", format_list(targets));
-    s
-}
-
-fn format_list<T: Display, const N: usize>(list: [T; N]) -> String {
-    let mut first = true;
-    let mut s = String::new();
-    for item in list {
-        if !first {
-            let _ = write!(s, ",");
-        }
-        first = false;
-        let _ = write!(s, " {item}");
+    Gate {
+        gate: "Measure".into(),
+        display_args: None,
+        is_controlled: false,
+        is_adjoint: false,
+        is_measurement: true,
+        controls: vec![Register {
+            r#type: 0,
+            q_id: qubit,
+            c_id: None,
+        }],
+        targets: vec![Register {
+            r#type: 1,
+            q_id: qubit,
+            c_id: Some(result),
+        }],
     }
-    s
 }
 
-impl Backend for BaseProfVisSim {
+fn rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N]) -> Gate {
+    Gate {
+        gate: name.into(),
+        display_args: Some(format!("{theta}")),
+        is_controlled: false,
+        is_adjoint: false,
+        is_measurement: false,
+        controls: vec![],
+        targets: targets
+            .iter()
+            .map(|q| Register {
+                r#type: 0,
+                q_id: q.0 .0,
+                c_id: None,
+            })
+            .collect(),
+    }
+}
+
+impl Backend for CircuitSim<'_> {
     type ResultType = usize;
 
     fn ccx(&mut self, ctl0: usize, ctl1: usize, q: usize) {
@@ -277,7 +277,7 @@ impl Backend for BaseProfVisSim {
         let ctl1 = self.map(ctl1);
         let q = self.map(q);
 
-        self.instrs.push_str(&format_controlled_gate(
+        self.circuit.operations.push(controlled_gate(
             "CX",
             [Qubit(ctl0), Qubit(ctl1)],
             [Qubit(q)],
@@ -287,27 +287,30 @@ impl Backend for BaseProfVisSim {
     fn cx(&mut self, ctl: usize, q: usize) {
         let ctl = self.map(ctl);
         let q = self.map(q);
-        self.instrs
-            .push_str(&format_controlled_gate("X", [Qubit(ctl)], [Qubit(q)]));
+        self.circuit
+            .operations
+            .push(controlled_gate("X", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn cy(&mut self, ctl: usize, q: usize) {
         let ctl = self.map(ctl);
         let q = self.map(q);
-        self.instrs
-            .push_str(&format_controlled_gate("Y", [Qubit(ctl)], [Qubit(q)]));
+        self.circuit
+            .operations
+            .push(controlled_gate("Y", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn cz(&mut self, ctl: usize, q: usize) {
         let ctl = self.map(ctl);
         let q = self.map(q);
-        self.instrs
-            .push_str(&format_controlled_gate("Z", [Qubit(ctl)], [Qubit(q)]));
+        self.circuit
+            .operations
+            .push(controlled_gate("Z", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn h(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("H", [Qubit(q)]));
+        self.circuit.operations.push(gate("H", [Qubit(q)]));
     }
 
     fn m(&mut self, q: usize) -> Self::ResultType {
@@ -333,92 +336,90 @@ impl Backend for BaseProfVisSim {
 
     fn rx(&mut self, theta: f64, q: usize) {
         let q = self.map(q);
-        self.instrs
-            .push_str(&format_rotation_gate("rx", Double(theta), [Qubit(q)]));
+        self.circuit
+            .operations
+            .push(rotation_gate("rx", Double(theta), [Qubit(q)]));
     }
 
     fn rxx(&mut self, theta: f64, q0: usize, q1: usize) {
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.instrs.push_str(&format_rotation_gate(
-            "rxx",
-            Double(theta),
-            [Qubit(q0), Qubit(q1)],
-        ));
+        self.circuit
+            .operations
+            .push(rotation_gate("rxx", Double(theta), [Qubit(q0), Qubit(q1)]));
     }
 
     fn ry(&mut self, theta: f64, q: usize) {
         let q = self.map(q);
-        self.instrs
-            .push_str(&format_rotation_gate("ry", Double(theta), [Qubit(q)]));
+        self.circuit
+            .operations
+            .push(rotation_gate("ry", Double(theta), [Qubit(q)]));
     }
 
     fn ryy(&mut self, theta: f64, q0: usize, q1: usize) {
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.instrs.push_str(&format_rotation_gate(
-            "ryy",
-            Double(theta),
-            [Qubit(q0), Qubit(q1)],
-        ));
+        self.circuit
+            .operations
+            .push(rotation_gate("ryy", Double(theta), [Qubit(q0), Qubit(q1)]));
     }
 
     fn rz(&mut self, theta: f64, q: usize) {
         let q = self.map(q);
-        self.instrs
-            .push_str(&format_rotation_gate("rz", Double(theta), [Qubit(q)]));
+        self.circuit
+            .operations
+            .push(rotation_gate("rz", Double(theta), [Qubit(q)]));
     }
 
     fn rzz(&mut self, theta: f64, q0: usize, q1: usize) {
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.instrs.push_str(&format_rotation_gate(
-            "rzz",
-            Double(theta),
-            [Qubit(q0), Qubit(q1)],
-        ));
+        self.circuit
+            .operations
+            .push(rotation_gate("rzz", Double(theta), [Qubit(q0), Qubit(q1)]));
     }
 
     fn sadj(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("adjoint S", [Qubit(q)]));
+        self.circuit.operations.push(adjoint_gate("S", [Qubit(q)]));
     }
 
     fn s(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("S", [Qubit(q)]));
+        self.circuit.operations.push(gate("S", [Qubit(q)]));
     }
 
     fn swap(&mut self, q0: usize, q1: usize) {
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.instrs
-            .push_str(&format_gate("SWAP", [Qubit(q0), Qubit(q1)]));
+        self.circuit
+            .operations
+            .push(gate("SWAP", [Qubit(q0), Qubit(q1)]));
     }
 
     fn tadj(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("adjoint T", [Qubit(q)]));
+        self.circuit.operations.push(adjoint_gate("T", [Qubit(q)]));
     }
 
     fn t(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("T", [Qubit(q)]));
+        self.circuit.operations.push(gate("T", [Qubit(q)]));
     }
 
     fn x(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("X", [Qubit(q)]));
+        self.circuit.operations.push(gate("X", [Qubit(q)]));
     }
 
     fn y(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("Y", [Qubit(q)]));
+        self.circuit.operations.push(gate("Y", [Qubit(q)]));
     }
 
     fn z(&mut self, q: usize) {
         let q = self.map(q);
-        self.instrs.push_str(&format_gate("Z", [Qubit(q)]));
+        self.circuit.operations.push(gate("Z", [Qubit(q)]));
     }
 
     fn qubit_allocate(&mut self) -> usize {

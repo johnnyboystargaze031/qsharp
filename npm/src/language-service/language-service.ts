@@ -13,6 +13,7 @@ import type {
   LanguageService,
   IPosition,
   VSDiagnostic,
+  ICodeLens,
 } from "../../lib/node/qsc_wasm.cjs";
 import { log } from "../log.js";
 import { IServiceEventTarget, IServiceProxy } from "../worker-proxy.js";
@@ -75,6 +76,7 @@ export interface ILanguageService {
     documentUri: string,
     position: IPosition,
   ): Promise<ITextEdit | undefined>;
+  getCodeLenses(documentUri: string): Promise<ICodeLens[]>;
 
   dispose(): Promise<void>;
 
@@ -207,6 +209,10 @@ export class QSharpLanguageService implements ILanguageService {
     position: IPosition,
   ): Promise<ITextEdit | undefined> {
     return this.languageService.prepare_rename(documentUri, position);
+  }
+
+  async getCodeLenses(documentUri: string): Promise<ICodeLens[]> {
+    return this.languageService.get_code_lenses(documentUri);
   }
 
   async dispose() {

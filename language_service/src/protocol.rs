@@ -125,3 +125,19 @@ pub struct ParameterInformation {
 pub struct NotebookMetadata {
     pub target_profile: Option<Profile>,
 }
+
+#[derive(Debug)]
+pub struct CodeLens {
+    pub range: Range,
+    pub command: CodeLensKind,
+}
+
+#[derive(Debug)]
+pub enum CodeLensKind {
+    Circuit,
+    OperationCircuit(String, String, String), // namespace, operation name, operation declaration
+    Histogram,
+    Debug,
+    Run,
+    Estimate,
+}

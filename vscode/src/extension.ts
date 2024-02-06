@@ -46,6 +46,7 @@ import {
   initLogForwarder,
   initOutputWindowLogger,
 } from "./logging.js";
+import { createCodeLensProvider } from "./codeLens.js";
 
 export async function activate(
   context: vscode.ExtensionContext,
@@ -216,6 +217,14 @@ async function activateLanguageService(extensionUri: vscode.Uri) {
     vscode.languages.registerRenameProvider(
       qsharpLanguageId,
       createRenameProvider(languageService),
+    ),
+  );
+
+  // code lens
+  subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      qsharpLanguageId,
+      createCodeLensProvider(languageService),
     ),
   );
 

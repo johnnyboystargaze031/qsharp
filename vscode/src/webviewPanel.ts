@@ -358,9 +358,73 @@ export function registerWebViewCommands(context: ExtensionContext) {
       }
     }),
   );
+
+  context.subscriptions.push(
+    commands.registerCommand(
+      "qsharp-vscode.showCircuit",
+      async (
+        operationNamespace?: string,
+        operationName?: string,
+        operationDecl?: string,
+      ) => {
+        const editor = window.activeTextEditor;
+        if (!editor || !isQsharpDocument(editor.document)) {
+          throw new Error("The currently active window is not a Q# file");
+        }
+
+        // Start the worker, run the code, and send the results to the webview
+        const worker = getCompilerWorker(compilerWorkerScriptPath);
+        const compilerTimeout = setTimeout(() => {
+          worker.terminate(); // Confirm: Does the 'terminate' in the finally below error if this happens?
+        }, compilerRunTimeoutMs);
+        try {
+          sendMessageToPanel("circuit", true, undefined);
+
+          let circuit;
+          let title;
+          const sources = await loadProject(editor.document.uri);
+          if (operationNamespace && operationName && operationDecl) {
+            const numQubits = 3;
+            const code = `
+namespace ${operationNamespace} {
+  operation _Invoke_${operationName}() : Result[] {
+    use qubits = Qubit[${numQubits}];
+    ${operationNamespace}.${operationName}(qubits);
+    ResetAll(qubits);
+    return [];
+  }
+}`;
+            sources.push(["<circuit_generation>", code]);
+            circuit = await worker.getCircuit(
+              sources,
+              `${operationNamespace}._Invoke_${operationName}()`,
+              false,
+            );
+            title = `${operationName} with ${numQubits} input qubits`;
+          } else {
+            circuit = await worker.getCircuit(sources, "", false);
+            title = "Circuit";
+          }
+
+          const message = {
+            command: "circuit",
+            circuit,
+            title,
+          };
+          sendMessageToPanel("circuit", false, message);
+          clearTimeout(compilerTimeout);
+        } catch (e: any) {
+          log.error("Circuit error. ", e.toString());
+          throw new Error("Run failed");
+        } finally {
+          worker.terminate();
+        }
+      },
+    ),
+  );
 }
 
-type PanelType = "histogram" | "estimates" | "help";
+type PanelType = "histogram" | "estimates" | "help" | "circuit";
 
 const panelTypeToPanel: Record<
   PanelType,
@@ -368,6 +432,7 @@ const panelTypeToPanel: Record<
 > = {
   histogram: { title: "Q# Histogram", panel: undefined, state: {} },
   estimates: { title: "Q# Estimates", panel: undefined, state: {} },
+  circuit: { title: "Q# Circuit", panel: undefined, state: {} },
   help: { title: "Q# Help", panel: undefined, state: {} },
 };
 
@@ -500,6 +565,7 @@ export class QSharpViewViewPanelSerializer implements WebviewPanelSerializer {
     if (
       panelType !== "estimates" &&
       panelType !== "histogram" &&
+      panelType !== "circuit" &&
       panelType !== "help"
     ) {
       // If it was loading when closed, that's fine

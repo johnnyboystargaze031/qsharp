@@ -15,7 +15,9 @@ pub use qsc_eval::{
     val::Value,
     StepAction, StepResult,
 };
-use qsc_vis::vis::BaseProfVisSim;
+use qsc_vis::base_prof::CircuitSim as BaseProfCircuitSim;
+use qsc_vis::high_level::CircuitSim as HighLevelCircuitSim;
+pub use qsc_vis::Circuit;
 
 use crate::{
     error::{self, WithStack},
@@ -290,18 +292,59 @@ impl Interpreter {
         Ok(sim.finish(&val))
     }
 
-    pub fn circuit_vis(&mut self, expr: &str) -> Result<String, Vec<Error>> {
+    pub fn circuit(&mut self, high_level: bool, expr: Option<&str>) -> Result<Circuit, Vec<Error>> {
         if self.capabilities != RuntimeCapabilityFlags::empty() {
             return Err(vec![Error::UnsupportedRuntimeCapabilities]);
         }
 
-        let mut sim = BaseProfVisSim::new();
         let mut stdout = std::io::sink();
         let mut out = GenericReceiver::new(&mut stdout);
 
-        let val = self.run_with_sim(&mut sim, &mut out, expr)??;
+        let eval_id: EvalId = if let Some(expr) = expr {
+            self.compile_expr_to_stmt(expr)?.into()
+        } else {
+            self.get_entry_expr()?.into()
+        };
 
-        Ok(sim.finish(&val))
+        if high_level {
+            let mut sim = HighLevelCircuitSim::new(self.compiler.package_store());
+
+            if self.quantum_seed.is_some() {
+                sim.set_seed(self.quantum_seed);
+            }
+
+            let val = eval(
+                self.source_package,
+                self.classical_seed,
+                eval_id,
+                self.compiler.package_store(),
+                &self.fir_store,
+                &mut Env::default(),
+                &mut sim,
+                &mut out,
+            )?;
+
+            Ok(sim.finish(&val))
+        } else {
+            let mut sim = BaseProfCircuitSim::new();
+
+            if self.quantum_seed.is_some() {
+                sim.set_seed(self.quantum_seed);
+            }
+
+            let val = eval(
+                self.source_package,
+                self.classical_seed,
+                eval_id,
+                self.compiler.package_store(),
+                &self.fir_store,
+                &mut Env::default(),
+                &mut sim,
+                &mut out,
+            )?;
+
+            Ok(sim.finish(&val))
+        }
     }
 
     /// Runs the given entry expression on the given simulator with a new instance of the environment

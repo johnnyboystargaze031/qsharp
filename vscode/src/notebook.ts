@@ -40,6 +40,7 @@ export function registerQSharpNotebookHandlers() {
   subscriptions.push(
     vscode.workspace.onDidChangeNotebookDocument((event) => {
       if (event.notebook.notebookType === jupyterNotebookType) {
+        event.notebook;
         // change.document will be undefined if the cell contents did not change -- filter those out.
         const changedCells = event.cellChanges
           .filter((change) => change.document)
@@ -57,14 +58,18 @@ export function registerQSharpNotebookHandlers() {
       // If this is a code cell that starts with %%qsharp, and language isn't already set to Q#, set it.
       if (cell.kind === vscode.NotebookCellKind.Code) {
         const document = cell.document;
-        if (
-          document.languageId !== qsharpLanguageId &&
-          findQSharpCellMagic(document)
-        ) {
-          vscode.languages.setTextDocumentLanguage(
-            cell.document,
-            qsharpLanguageId,
-          );
+        if (findQSharpCellMagic(document)) {
+          if (document.languageId !== qsharpLanguageId) {
+            vscode.languages.setTextDocumentLanguage(
+              cell.document,
+              qsharpLanguageId,
+            );
+          }
+        } else {
+          // Flip it back to Python.
+          if (document.languageId === qsharpLanguageId) {
+            vscode.languages.setTextDocumentLanguage(cell.document, "python");
+          }
         }
       }
     }
