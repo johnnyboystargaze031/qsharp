@@ -389,6 +389,9 @@ export function registerWebViewCommands(context: ExtensionContext) {
           let qubitReuse = false;
           let stateDumps = false;
 
+          // example comment
+          // circuit { "boxConditionals": false, "boxOperations": false, "numQubits": 2, "qubitReuse": false, "stateDumps": false }
+
           if (maybeConfig.startsWith(magic)) {
             const config = JSON.parse(maybeConfig.slice(magic.length));
             if (config.boxConditionals !== undefined) {
