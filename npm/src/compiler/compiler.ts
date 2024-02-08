@@ -29,6 +29,8 @@ export interface ICompiler {
     expr: string,
     boxConditionals: boolean,
     boxOperations: boolean,
+    qubitReuse: boolean,
+    showStateDumps: boolean,
   ): Promise<object>;
   checkExerciseSolution(
     user_code: string,
@@ -88,9 +90,18 @@ export class Compiler implements ICompiler {
     expr: string,
     boxConditionals: boolean,
     boxOperations: boolean,
+    qubitReuse: boolean,
+    showStateDumps: boolean,
   ): Promise<object> {
     return JSON.parse(
-      this.wasm.get_circuit(sources, expr, boxConditionals, boxOperations),
+      this.wasm.get_circuit(
+        sources,
+        expr,
+        boxConditionals,
+        boxOperations,
+        qubitReuse,
+        showStateDumps,
+      ),
     );
   }
 

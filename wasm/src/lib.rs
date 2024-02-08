@@ -124,15 +124,31 @@ pub fn get_circuit(
     entry: Option<String>,
     box_conditionals: bool,
     box_operations: bool,
+    qubit_reuse: bool,
+    show_state_dumps: bool,
 ) -> Result<String, String> {
     let sources = get_source_map(sources, entry);
 
-    let mut interpreter =
-        interpret::Interpreter::new(true, sources, PackageType::Exe, Profile::Base.into())
-            .map_err(|e| e[0].to_string())?;
+    let mut interpreter = interpret::Interpreter::new(
+        true,
+        sources,
+        PackageType::Exe,
+        if qubit_reuse {
+            Profile::Unrestricted.into()
+        } else {
+            Profile::Base.into()
+        },
+    )
+    .map_err(|e| e[0].to_string())?;
 
     let circuit = interpreter
-        .circuit(box_conditionals, box_operations, None)
+        .circuit(
+            box_conditionals,
+            box_operations,
+            qubit_reuse,
+            show_state_dumps,
+            None,
+        )
         .map_err(|e| e.into_iter().map(|e| e.to_string()).collect::<String>())?;
 
     serde_json::to_string(&circuit).map_err(|e| e.to_string())

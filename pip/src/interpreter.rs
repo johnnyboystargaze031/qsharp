@@ -198,7 +198,10 @@ impl Interpreter {
     }
 
     fn circuit(&mut self, py: Python, entry_expr: &str) -> PyResult<PyObject> {
-        match self.interpreter.circuit(true, true, Some(entry_expr)) {
+        match self
+            .interpreter
+            .circuit(true, true, false, true, Some(entry_expr))
+        {
             Ok(circuit) => Ok(PyCircuit(circuit).into_py(py)),
             Err(errors) => Err(QSharpError::new_err(format_errors(errors))),
         }

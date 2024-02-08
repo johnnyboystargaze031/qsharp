@@ -382,15 +382,35 @@ export function registerWebViewCommands(context: ExtensionContext) {
 
           const maybeConfig = editor.document.lineAt(0).text;
           const magic = "// circuit ";
+
           let boxConditionals = false;
           let boxOperations = false;
-          let numQubits = 3;
+          let numQubits = 2;
+          let qubitReuse = false;
+          let stateDumps = false;
+
           if (maybeConfig.startsWith(magic)) {
             const config = JSON.parse(maybeConfig.slice(magic.length));
-            boxConditionals = config.boxConditionals;
-            boxOperations = config.boxOperations;
-            numQubits = config.qubits;
+            if (config.boxConditionals !== undefined) {
+              boxConditionals = config.boxConditionals;
+            }
+            if (config.boxOperations !== undefined) {
+              boxOperations = config.boxOperations;
+            }
+            if (config.numQubits !== undefined) {
+              numQubits = config.numQubits;
+            }
+            if (config.qubitReuse !== undefined) {
+              qubitReuse = config.qubitReuse;
+            }
+            if (config.stateDumps !== undefined) {
+              stateDumps = config.stateDumps;
+            }
           }
+
+          log.info(
+            `generating circuit, boxConditionals: ${boxConditionals}, boxOperations: ${boxOperations}, numQubits: ${numQubits}, qubitReuse: ${qubitReuse} stateDumps: ${stateDumps}`,
+          );
 
           let circuit;
           let title;
@@ -411,6 +431,8 @@ namespace ${operationNamespace} {
               `${operationNamespace}._Invoke_${operationName}()`,
               boxConditionals,
               boxOperations,
+              qubitReuse,
+              stateDumps,
             );
             title = `${operationName} with ${numQubits} input qubits`;
           } else {
@@ -419,6 +441,8 @@ namespace ${operationNamespace} {
               "",
               boxConditionals,
               boxOperations,
+              qubitReuse,
+              stateDumps,
             );
             title = editor.document.uri.path.split("/").pop() || "Circuit";
           }

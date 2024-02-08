@@ -41,7 +41,7 @@ pub fn generate_circuit(
     let unit = fir_store.get(package).expect("store should have package");
     let entry_expr = unit.entry.expect("package should have entry");
 
-    let mut sim = CircuitSim::new(store, &fir_store, true, true);
+    let mut sim = CircuitSim::new(store, &fir_store, true, true, true, true);
     let mut stdout = std::io::sink();
     let mut out = GenericReceiver::new(&mut stdout);
     let result = eval(
@@ -83,6 +83,8 @@ pub struct CircuitSim<'a> {
     box_conditionals: bool,
     box_operations: bool,
     sparse_sim: SparseSim,
+    qubit_reuse: bool,
+    show_state_dumps: bool,
 }
 
 enum StackFrame {
@@ -97,6 +99,8 @@ impl<'a> CircuitSim<'a> {
         fir_store: &'a dyn fir::PackageStoreLookup,
         box_conditionals: bool,
         box_operations: bool,
+        qubit_reuse: bool,
+        show_state_dumps: bool,
     ) -> Self {
         CircuitSim {
             next_meas_id: 0,
@@ -112,6 +116,8 @@ impl<'a> CircuitSim<'a> {
             box_conditionals,
             box_operations,
             sparse_sim: SparseSim::new(),
+            qubit_reuse,
+            show_state_dumps,
         }
     }
 
@@ -146,11 +152,12 @@ impl<'a> CircuitSim<'a> {
                 map
             },
         );
-        for (qubit, results) in &by_qubit {
-            let mut i = 0;
-            for _result in results {
-                self.push_gate(measurement_gate(qubit, i));
-                i += 0;
+
+        if !self.qubit_reuse {
+            for (qubit, results) in &by_qubit {
+                for result in results {
+                    self.push_gate(measurement_gate(qubit, result.0));
+                }
             }
         }
 
@@ -284,7 +291,7 @@ fn controlled_gate<const M: usize, const N: usize>(
     }
 }
 
-fn measurement_gate(qubit: usize, result: usize) -> Operation {
+fn measurement_gate(qubit: usize, _result: usize) -> Operation {
     // {
     //     "gate": "Measure",
     //     "isMeasurement": "True",
@@ -306,7 +313,7 @@ fn measurement_gate(qubit: usize, result: usize) -> Operation {
         targets: vec![Register {
             r#type: 1,
             q_id: qubit,
-            c_id: Some(result),
+            c_id: Some(0), // dunno why but quantum-viz wants this to be zero always
         }],
         children: vec![],
     }
@@ -512,22 +519,28 @@ impl Backend for CircuitSim<'_> {
         let id = self.get_meas_id();
         // Measurements are tracked separately from instructions, so that they can be
         // deferred until the end of the program.
+        if self.qubit_reuse {
+            self.push_gate(measurement_gate(mapped_q.0, id));
+        }
         self.measurements.push((Qubit(mapped_q), Result(id)));
+
         self.reset(q);
         id
     }
 
     fn mresetz(&mut self, q: usize) -> Self::ResultType {
-        // don't measure in the sparse sim, no point
         self.m(q)
     }
 
     fn reset(&mut self, q: usize) {
         self.sparse_sim.reset(q);
-        // Reset is a no-op in Base Profile, but does force qubit remapping so that future
-        // operations on the given qubit id are performed on a fresh qubit. Clear the entry in the map
-        // so it is known to require remapping on next use.
-        self.qubit_map.remove(q);
+
+        if !self.qubit_reuse {
+            // Reset is a no-op in Base Profile, but does force qubit remapping so that future
+            // operations on the given qubit id are performed on a fresh qubit. Clear the entry in the map
+            // so it is known to require remapping on next use.
+            self.qubit_map.remove(q);
+        }
     }
 
     fn rx(&mut self, theta: f64, q: usize) {
@@ -623,45 +636,51 @@ impl Backend for CircuitSim<'_> {
         // let id = self.next_qubit_id;
         // self.next_qubit_id += 1;
         let _ = self.map(id);
+        info!("allocated qubit ${id}");
         id
     }
 
     fn qubit_release(&mut self, q: usize) {
+        info!("releasing qubit ${q}");
         self.sparse_sim.qubit_release(q);
         // self.next_qubit_id -= 1;
     }
 
     fn capture_quantum_state(&mut self) -> (Vec<(BigUint, Complex<f64>)>, usize) {
-        let (state, qubit_count) = self.sparse_sim.capture_quantum_state();
+        if self.show_state_dumps {
+            let (state, qubit_count) = self.sparse_sim.capture_quantum_state();
 
-        let mut st = String::new();
-        writeln!(st, "STATE:\n").expect("string write should succeed");
-        for (id, state) in state {
-            writeln!(
-                st,
-                "{}: {}\n",
-                format_state_id(&id, qubit_count),
-                fmt_complex(&state),
-            )
-            .expect("string write should succeed");
+            let mut st = String::new();
+            writeln!(st, "STATE:\n").expect("string write should succeed");
+            for (id, state) in state {
+                writeln!(
+                    st,
+                    "{}: {}\n",
+                    format_state_id(&id, qubit_count),
+                    fmt_complex(&state),
+                )
+                .expect("string write should succeed");
+            }
+
+            self.push_gate(Operation {
+                gate: st,
+                display_args: None,
+                is_controlled: false,
+                is_adjoint: false,
+                is_measurement: false,
+                controls: vec![],
+                targets: self
+                    .qubit_map
+                    .values()
+                    .map(|h| Register {
+                        q_id: h.0,
+                        c_id: None,
+                        r#type: 0,
+                    })
+                    .collect(),
+                children: vec![],
+            });
         }
-
-        self.push_gate(Operation {
-            gate: st,
-            display_args: None,
-            is_controlled: false,
-            is_adjoint: false,
-            is_measurement: false,
-            controls: vec![],
-            targets: (0..(self.next_qubit_hardware_id.0))
-                .map(|i| Register {
-                    q_id: i,
-                    c_id: None,
-                    r#type: 0,
-                })
-                .collect(),
-            children: vec![],
-        });
 
         (Vec::new(), 0)
     }

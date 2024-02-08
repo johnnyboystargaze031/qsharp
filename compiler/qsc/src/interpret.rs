@@ -296,11 +296,13 @@ impl Interpreter {
         &mut self,
         box_conditionals: bool,
         box_operations: bool,
+        qubit_reuse: bool,
+        show_state_dumps: bool,
         expr: Option<&str>,
     ) -> Result<Circuit, Vec<Error>> {
-        if self.capabilities != RuntimeCapabilityFlags::empty() {
-            return Err(vec![Error::UnsupportedRuntimeCapabilities]);
-        }
+        // if self.capabilities != RuntimeCapabilityFlags::empty() {
+        //     return Err(vec![Error::UnsupportedRuntimeCapabilities]);
+        // }
 
         let mut stdout = std::io::sink();
         let mut out = GenericReceiver::new(&mut stdout);
@@ -317,6 +319,8 @@ impl Interpreter {
             &self.fir_store,
             box_conditionals,
             box_operations,
+            qubit_reuse,
+            show_state_dumps,
         );
 
         if self.quantum_seed.is_some() {
