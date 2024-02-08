@@ -317,9 +317,10 @@ if build_wasm:
         os.path.join(wasm_bld, "node"),
     ]
     subprocess.run(wasm_pack_args + web_build_args, check=True, text=True, cwd=wasm_src)
-    subprocess.run(
-        wasm_pack_args + node_build_args, check=True, text=True, cwd=wasm_src
-    )
+    if run_tests:
+        subprocess.run(
+            wasm_pack_args + node_build_args, check=True, text=True, cwd=wasm_src
+        )
     step_end()
 
 if build_samples:
