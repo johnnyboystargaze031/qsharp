@@ -20,10 +20,23 @@ export function CircuitPanel(props: { title: string; circuit: object }) {
         <h1>{props.title}</h1>
       </div>
       <div id="circuit-container"></div>
-      {/* <pre>{JSON.stringify(props.circuit, null, 2)}</pre> */}
       <div>
         Tip: you can generate a circuit diagram for any operation that takes an
         array of qubits (Qubit[]) as input.
+      </div>
+      <div>
+        <a
+          href="#"
+          onClick={() =>
+            (document.getElementById("jsonSource")!.hidden =
+              !document.getElementById("jsonSource")!.hidden)
+          }
+        >
+          show json
+        </a>
+        <pre id="jsonSource" hidden={true}>
+          {JSON.stringify(props.circuit, null, 2)}
+        </pre>
       </div>
     </div>
   );

@@ -953,6 +953,7 @@ version = "0.0.0"
 dependencies = [
  "expect-test",
  "indoc",
+ "log",
  "miette",
  "num-bigint",
  "num-complex",
@@ -1055,6 +1056,7 @@ version = "0.0.0"
 dependencies = [
  "expect-test",
  "indoc",
+ "log",
  "num-bigint",
  "num-complex",
  "qsc_data_structures",
@@ -1063,6 +1065,7 @@ dependencies = [
  "qsc_frontend",
  "qsc_hir",
  "qsc_passes",
+ "rustc-hash",
  "serde",
  "serde_json",
 ]

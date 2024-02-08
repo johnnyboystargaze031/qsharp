@@ -21,7 +21,7 @@ use qsc::{
     interpret::{
         self,
         output::{Error, Receiver},
-        Circuit, Value,
+        Circuit, Operation, Value,
     },
     project::{FileSystem, Manifest, ManifestDescriptor},
     target::Profile,
@@ -233,6 +233,7 @@ impl Interpreter {
 }
 
 struct PyCircuit(Circuit);
+struct PyOperation(Operation);
 
 impl IntoPy<PyObject> for PyCircuit {
     fn into_py(self, py: Python<'_>) -> PyObject {
@@ -241,45 +242,10 @@ impl IntoPy<PyObject> for PyCircuit {
             "operations",
             PyList::new(
                 py,
-                self.0.operations.into_iter().map(|g| {
-                    let gate = PyDict::new(py);
-                    let _ = gate.set_item("gate", g.gate);
-                    let _ = gate.set_item("displayArgs", g.display_args);
-                    let _ = gate.set_item("isControlled", g.is_controlled);
-                    let _ = gate.set_item("isAdjoint", g.is_adjoint);
-                    let _ = gate.set_item("isMeasurement", g.is_measurement);
-                    let _ = gate.set_item(
-                        "controls",
-                        PyList::new(
-                            py,
-                            g.controls.into_iter().map(|r| {
-                                let register = PyDict::new(py);
-                                let _ = register.set_item("qId", r.q_id);
-                                let _ = register.set_item("type", r.r#type);
-                                if let Some(c_id) = r.c_id {
-                                    let _ = register.set_item("cId", c_id);
-                                }
-                                register
-                            }),
-                        ),
-                    );
-                    let _ = gate.set_item(
-                        "targets",
-                        PyList::new(
-                            py,
-                            g.targets.into_iter().map(|r| {
-                                let register = PyDict::new(py);
-                                let _ = register.set_item("qId", r.q_id);
-                                let _ = register.set_item("type", r.r#type);
-                                if let Some(c_id) = r.c_id {
-                                    let _ = register.set_item("cId", c_id);
-                                }
-                                register
-                            }),
-                        ),
-                    );
-                    gate
-                }),
+                self.0
+                    .operations
+                    .into_iter()
+                    .map(|g| PyOperation(g).into_py(py)),
             ),
         );
         let _ = dict.set_item(
@@ -295,6 +261,58 @@ impl IntoPy<PyObject> for PyCircuit {
             ),
         );
         dict.into_py(py)
+    }
+}
+
+impl IntoPy<PyObject> for PyOperation {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        let gate = PyDict::new(py);
+        let _ = gate.set_item("gate", self.0.gate);
+        let _ = gate.set_item("displayArgs", self.0.display_args);
+        let _ = gate.set_item("isControlled", self.0.is_controlled);
+        let _ = gate.set_item("isAdjoint", self.0.is_adjoint);
+        let _ = gate.set_item("isMeasurement", self.0.is_measurement);
+        let _ = gate.set_item(
+            "controls",
+            PyList::new(
+                py,
+                self.0.controls.into_iter().map(|r| {
+                    let register = PyDict::new(py);
+                    let _ = register.set_item("qId", r.q_id);
+                    let _ = register.set_item("type", r.r#type);
+                    if let Some(c_id) = r.c_id {
+                        let _ = register.set_item("cId", c_id);
+                    }
+                    register
+                }),
+            ),
+        );
+        let _ = gate.set_item(
+            "targets",
+            PyList::new(
+                py,
+                self.0.targets.into_iter().map(|r| {
+                    let register = PyDict::new(py);
+                    let _ = register.set_item("qId", r.q_id);
+                    let _ = register.set_item("type", r.r#type);
+                    if let Some(c_id) = r.c_id {
+                        let _ = register.set_item("cId", c_id);
+                    }
+                    register
+                }),
+            ),
+        );
+        let _ = gate.set_item(
+            "children",
+            PyList::new(
+                py,
+                self.0
+                    .children
+                    .into_iter()
+                    .map(|g| PyOperation(g).into_py(py)),
+            ),
+        );
+        gate.into_py(py)
     }
 }
 

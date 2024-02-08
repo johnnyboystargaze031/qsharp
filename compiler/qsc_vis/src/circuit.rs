@@ -6,12 +6,12 @@ use std::ops::Not;
 
 #[derive(Serialize, Default, Debug)]
 pub struct Circuit {
-    pub operations: Vec<Gate>,
+    pub operations: Vec<Operation>,
     pub qubits: Vec<Qubit>,
 }
 
 #[derive(Serialize, Debug)]
-pub struct Gate {
+pub struct Operation {
     #[allow(clippy::struct_field_names)]
     pub gate: String,
     #[serde(rename = "displayArgs")]
@@ -29,8 +29,11 @@ pub struct Gate {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub controls: Vec<Register>,
     pub targets: Vec<Register>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<Operation>,
 }
-#[derive(Serialize, Debug)]
+
+#[derive(Serialize, Debug, Eq, Hash, PartialEq, Clone)]
 pub struct Register {
     #[serde(rename = "qId")]
     pub q_id: usize,

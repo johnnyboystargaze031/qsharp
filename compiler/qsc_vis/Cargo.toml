@@ -10,6 +10,7 @@ license.workspace = true
 
 [dependencies]
 indoc = { workspace = true }
+log = { workspace = true }
 num-bigint = { workspace = true }
 num-complex = { workspace = true }
 qsc_eval = { path = "../qsc_eval" }
@@ -17,6 +18,7 @@ qsc_data_structures = { path = "../qsc_data_structures" }
 qsc_frontend = { path = "../qsc_frontend" }
 qsc_fir = { path = "../qsc_fir" }
 qsc_hir = { path = "../qsc_hir" }
+rustc-hash = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

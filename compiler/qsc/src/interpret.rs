@@ -17,7 +17,7 @@ pub use qsc_eval::{
 };
 use qsc_vis::base_prof::CircuitSim as BaseProfCircuitSim;
 use qsc_vis::high_level::CircuitSim as HighLevelCircuitSim;
-pub use qsc_vis::Circuit;
+pub use qsc_vis::{Circuit, Operation};
 
 use crate::{
     error::{self, WithStack},
@@ -307,22 +307,29 @@ impl Interpreter {
         };
 
         if high_level {
-            let mut sim = HighLevelCircuitSim::new(self.compiler.package_store());
+            let mut sim = HighLevelCircuitSim::new(self.compiler.package_store(), &self.fir_store);
 
             if self.quantum_seed.is_some() {
                 sim.set_seed(self.quantum_seed);
             }
 
-            let val = eval(
+            let val = qsc_eval::eval_take_state(
                 self.source_package,
                 self.classical_seed,
                 eval_id,
-                self.compiler.package_store(),
                 &self.fir_store,
                 &mut Env::default(),
                 &mut sim,
                 &mut out,
-            )?;
+            )
+            .map_err(|(error, call_stack)| {
+                eval_error(
+                    self.compiler.package_store(),
+                    &self.fir_store,
+                    call_stack,
+                    error,
+                )
+            })?;
 
             Ok(sim.finish(&val))
         } else {

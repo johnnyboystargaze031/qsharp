@@ -398,13 +398,15 @@ namespace ${operationNamespace} {
             circuit = await worker.getCircuit(
               sources,
               `${operationNamespace}._Invoke_${operationName}()`,
-              false,
+              true,
             );
             title = `${operationName} with ${numQubits} input qubits`;
           } else {
-            circuit = await worker.getCircuit(sources, "", false);
-            title = "Circuit";
+            circuit = await worker.getCircuit(sources, "", true);
+            title = editor.document.uri.path.split("/").pop() || "Circuit";
           }
+
+          log.info("generating circuit " + JSON.stringify(circuit));
 
           const message = {
             command: "circuit",

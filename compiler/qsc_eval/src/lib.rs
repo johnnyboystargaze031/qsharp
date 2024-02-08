@@ -26,7 +26,7 @@ use qsc_data_structures::span::Span;
 use qsc_fir::fir::{
     self, BinOp, BlockId, CallableImpl, ExprId, ExprKind, Field, Functor, Global, Lit, LocalItemId,
     Mutability, NodeId, PackageId, PackageStoreLookup, PatId, PatKind, PrimField, Res, StmtId,
-    StmtKind, StoreItemId, StringComponent, UnOp,
+    StmtKind, StoreExprId, StoreItemId, StringComponent, UnOp,
 };
 use qsc_fir::ty::Ty;
 use rand::{rngs::StdRng, SeedableRng};
@@ -197,6 +197,33 @@ impl From<StmtId> for EvalId {
 /// # Panics
 /// On internal error where no result is returned.
 pub fn eval(
+    package: PackageId,
+    seed: Option<u64>,
+    id: EvalId,
+    globals: &impl PackageStoreLookup,
+    env: &mut Env,
+    sim: &mut impl Backend<ResultType = impl Into<val::Result>>,
+    receiver: &mut impl Receiver,
+) -> Result<Value, (Error, Vec<Frame>)> {
+    let mut state = State::new(package, seed);
+    match id {
+        EvalId::Expr(expr) => state.push_expr(expr),
+        EvalId::Stmt(stmt) => state.push_stmt(stmt),
+    }
+    let res = state.eval(globals, env, sim, receiver, &[], StepAction::Continue)?;
+    let StepResult::Return(value) = res else {
+        panic!("eval should always return a value");
+    };
+    Ok(value)
+}
+
+/// Evaluates the given code with the given context.
+/// # Errors
+/// Returns the first error encountered during execution.
+/// # Panics
+/// On internal error where no result is returned.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_take_state(
     package: PackageId,
     seed: Option<u64>,
     id: EvalId,
@@ -431,7 +458,7 @@ pub struct State {
     stack: Vec<Cont>,
     vals: Vec<Value>,
     package: PackageId,
-    call_stack: CallStack,
+    pub call_stack: CallStack,
     current_span: Span,
     rng: RefCell<StdRng>,
 }
@@ -465,7 +492,14 @@ impl State {
         self.stack.push(Cont::Expr(expr));
     }
 
-    fn push_frame(&mut self, id: StoreItemId, functor: FunctorApp) {
+    fn push_frame(
+        &mut self,
+        id: StoreItemId,
+        functor: FunctorApp,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
+    ) {
+        context_receiver.push_call(id);
+
         self.call_stack.push_frame(Frame {
             span: self.current_span,
             id,
@@ -476,7 +510,13 @@ impl State {
         self.package = id.package;
     }
 
-    fn leave_frame(&mut self, len: usize) {
+    fn leave_frame(
+        &mut self,
+        len: usize,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
+    ) {
+        context_receiver.pop_call();
+
         let frame = self
             .call_stack
             .pop_frame()
@@ -487,7 +527,14 @@ impl State {
         self.push_val(frame_val);
     }
 
-    fn push_scope(&mut self, env: &mut Env) {
+    fn push_scope(
+        &mut self,
+        env: &mut Env,
+        expr_id: Option<StoreExprId>,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
+    ) {
+        context_receiver.push_scope(expr_id);
+
         env.push_scope(self.call_stack.len());
         self.stack.push(Cont::Scope);
     }
@@ -496,9 +543,16 @@ impl State {
         self.stack.push(Cont::Stmt(stmt));
     }
 
-    fn push_block(&mut self, env: &mut Env, globals: &impl PackageStoreLookup, block: BlockId) {
+    fn push_block(
+        &mut self,
+        env: &mut Env,
+        globals: &impl PackageStoreLookup,
+        block: BlockId,
+        expr_id: Option<StoreExprId>,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
+    ) {
         let block = globals.get_block((self.package, block).into());
-        self.push_scope(env);
+        self.push_scope(env, expr_id, context_receiver);
         for stmt in block.stmts.iter().rev() {
             self.push_stmt(*stmt);
             self.push_action(Action::Consume);
@@ -556,15 +610,16 @@ impl State {
                     continue;
                 }
                 Cont::Expr(expr) => {
-                    self.cont_expr(env, globals, expr)
+                    self.cont_expr(env, globals, expr, sim)
                         .map_err(|e| (e, self.get_stack_frames()))?;
                     continue;
                 }
                 Cont::Frame(len) => {
-                    self.leave_frame(len);
+                    self.leave_frame(len, sim);
                     continue;
                 }
                 Cont::Scope => {
+                    sim.pop_scope();
                     env.leave_scope();
                     continue;
                 }
@@ -612,6 +667,7 @@ impl State {
         env: &mut Env,
         globals: &impl PackageStoreLookup,
         expr: ExprId,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
     ) -> Result<(), Error> {
         let expr = globals.get_expr((self.package, expr).into());
         self.current_span = expr.span;
@@ -628,7 +684,7 @@ impl State {
                 self.cont_assign_index(globals, *lhs, *mid, *rhs);
             }
             ExprKind::BinOp(op, lhs, rhs) => self.cont_binop(globals, *op, *rhs, *lhs),
-            ExprKind::Block(block) => self.push_block(env, globals, *block),
+            ExprKind::Block(block) => self.push_block(env, globals, *block, None, context_receiver),
             ExprKind::Call(callee_expr, args_expr) => {
                 self.cont_call(globals, *callee_expr, *args_expr);
             }
@@ -923,7 +979,7 @@ impl State {
             Action::Range(has_start, has_step, has_end) => {
                 self.eval_range(has_start, has_step, has_end);
             }
-            Action::Return => self.eval_ret(env),
+            Action::Return => self.eval_ret(env, sim),
             Action::StringConcat(len) => self.eval_string_concat(len),
             Action::StringLit(str) => self.push_val(Value::String(str)),
             Action::UpdateIndex(span) => self.eval_update_index(span)?,
@@ -933,7 +989,7 @@ impl State {
             Action::Tuple(len) => self.eval_tup(len),
             Action::UnOp(op) => self.eval_unop(op),
             Action::UpdateField(field) => self.eval_update_field(field),
-            Action::While(cond_expr, block) => self.eval_while(env, globals, cond_expr, block),
+            Action::While(cond_expr, block) => self.eval_while(env, globals, cond_expr, block, sim),
         }
         Ok(())
     }
@@ -1093,8 +1149,8 @@ impl State {
         };
 
         let spec = spec_from_functor_app(functor);
-        self.push_frame(callee_id, functor);
-        self.push_scope(env);
+        self.push_frame(callee_id, functor, sim);
+        self.push_scope(env, None, sim); // maybe we can rely on push_scope for callables as well
         match &callee.implementation {
             CallableImpl::Intrinsic => {
                 let name = &callee.name.name;
@@ -1127,7 +1183,7 @@ impl State {
                     functor.controlled,
                     fixed_args,
                 );
-                self.push_block(env, globals, spec_decl.block);
+                self.push_block(env, globals, spec_decl.block, None, sim);
                 Ok(())
             }
         }
@@ -1195,14 +1251,21 @@ impl State {
         self.push_val(Value::Range(start, step, end));
     }
 
-    fn eval_ret(&mut self, env: &mut Env) {
+    fn eval_ret(
+        &mut self,
+        env: &mut Env,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
+    ) {
         while let Some(cont) = self.pop_cont() {
             match cont {
                 Cont::Frame(len) => {
-                    self.leave_frame(len);
+                    self.leave_frame(len, context_receiver);
                     break;
                 }
-                Cont::Scope => env.leave_scope(),
+                Cont::Scope => {
+                    context_receiver.pop_scope();
+                    env.leave_scope();
+                }
                 _ => {}
             }
         }
@@ -1368,12 +1431,22 @@ impl State {
         globals: &impl PackageStoreLookup,
         cond_expr: ExprId,
         block: BlockId,
+        context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
     ) {
         if self.pop_val().unwrap_bool() {
             self.cont_while(cond_expr, block);
             self.push_action(Action::Consume);
             self.push_val(Value::unit());
-            self.push_block(env, globals, block);
+            self.push_block(
+                env,
+                globals,
+                block,
+                Some(StoreExprId {
+                    package: self.package,
+                    expr: cond_expr,
+                }),
+                context_receiver,
+            );
         } else {
             self.push_val(Value::unit());
         }

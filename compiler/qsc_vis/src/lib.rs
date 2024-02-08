@@ -8,4 +8,4 @@ pub mod base_prof;
 mod circuit;
 pub mod high_level;
 
-pub use circuit::Circuit;
+pub use circuit::{Circuit, Operation};

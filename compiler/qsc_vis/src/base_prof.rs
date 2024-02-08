@@ -4,7 +4,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::circuit::{Circuit, Gate, Register};
+use crate::circuit::{Circuit, Operation, Register};
 use num_bigint::BigUint;
 use num_complex::Complex;
 use qsc_data_structures::index_map::IndexMap;
@@ -147,12 +147,12 @@ impl CircuitSim {
     }
 }
 
-fn gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Gate {
+fn gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Operation {
     // {
     //     "gate": "H",
     //     "targets": [{ "qId": 0 }],
     // }
-    Gate {
+    Operation {
         gate: name.into(),
         display_args: None,
         is_controlled: false,
@@ -167,11 +167,12 @@ fn gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Gate {
                 c_id: None,
             })
             .collect(),
+        children: vec![],
     }
 }
 
-fn adjoint_gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Gate {
-    Gate {
+fn adjoint_gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Operation {
+    Operation {
         gate: name.into(),
         display_args: None,
         is_controlled: false,
@@ -186,6 +187,7 @@ fn adjoint_gate<const N: usize>(name: &str, targets: [Qubit; N]) -> Gate {
                 c_id: None,
             })
             .collect(),
+        children: vec![],
     }
 }
 
@@ -193,7 +195,7 @@ fn controlled_gate<const M: usize, const N: usize>(
     name: &str,
     controls: [Qubit; M],
     targets: [Qubit; N],
-) -> Gate {
+) -> Operation {
     // {
     //     "gate": "X",
     //     "isControlled": "True",
@@ -201,7 +203,7 @@ fn controlled_gate<const M: usize, const N: usize>(
     //     "targets": [{ "qId": 1 }],
     // }
 
-    Gate {
+    Operation {
         gate: name.into(),
         display_args: None,
         is_controlled: true,
@@ -223,10 +225,11 @@ fn controlled_gate<const M: usize, const N: usize>(
                 c_id: None,
             })
             .collect(),
+        children: vec![],
     }
 }
 
-fn measurement_gate(qubit: usize, result: usize) -> Gate {
+fn measurement_gate(qubit: usize, result: usize) -> Operation {
     // {
     //     "gate": "Measure",
     //     "isMeasurement": "True",
@@ -234,7 +237,7 @@ fn measurement_gate(qubit: usize, result: usize) -> Gate {
     //     "targets": [{ "type": 1, "qId": 1, "cId": 0 }],
     // }
 
-    Gate {
+    Operation {
         gate: "Measure".into(),
         display_args: None,
         is_controlled: false,
@@ -250,11 +253,12 @@ fn measurement_gate(qubit: usize, result: usize) -> Gate {
             q_id: qubit,
             c_id: Some(result),
         }],
+        children: vec![],
     }
 }
 
-fn rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N]) -> Gate {
-    Gate {
+fn rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N]) -> Operation {
+    Operation {
         gate: name.into(),
         display_args: Some(format!("{theta}")),
         is_controlled: false,
@@ -269,6 +273,7 @@ fn rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N])
                 c_id: None,
             })
             .collect(),
+        children: vec![],
     }
 }
 
