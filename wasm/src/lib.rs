@@ -122,7 +122,8 @@ pub fn get_estimates(sources: Vec<js_sys::Array>, params: &str) -> Result<String
 pub fn get_circuit(
     sources: Vec<js_sys::Array>,
     entry: Option<String>,
-    high_level: bool,
+    box_conditionals: bool,
+    box_operations: bool,
 ) -> Result<String, String> {
     let sources = get_source_map(sources, entry);
 
@@ -131,7 +132,7 @@ pub fn get_circuit(
             .map_err(|e| e[0].to_string())?;
 
     let circuit = interpreter
-        .circuit(high_level, None)
+        .circuit(box_conditionals, box_operations, None)
         .map_err(|e| e.into_iter().map(|e| e.to_string()).collect::<String>())?;
 
     serde_json::to_string(&circuit).map_err(|e| e.to_string())

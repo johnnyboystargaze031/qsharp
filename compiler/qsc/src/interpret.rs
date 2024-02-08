@@ -15,7 +15,7 @@ pub use qsc_eval::{
     val::Value,
     StepAction, StepResult,
 };
-use qsc_vis::base_prof::CircuitSim as BaseProfCircuitSim;
+// use qsc_vis::base_prof::CircuitSim as BaseProfCircuitSim;
 use qsc_vis::high_level::CircuitSim as HighLevelCircuitSim;
 pub use qsc_vis::{Circuit, Operation};
 
@@ -292,7 +292,12 @@ impl Interpreter {
         Ok(sim.finish(&val))
     }
 
-    pub fn circuit(&mut self, high_level: bool, expr: Option<&str>) -> Result<Circuit, Vec<Error>> {
+    pub fn circuit(
+        &mut self,
+        box_conditionals: bool,
+        box_operations: bool,
+        expr: Option<&str>,
+    ) -> Result<Circuit, Vec<Error>> {
         if self.capabilities != RuntimeCapabilityFlags::empty() {
             return Err(vec![Error::UnsupportedRuntimeCapabilities]);
         }
@@ -306,52 +311,57 @@ impl Interpreter {
             self.get_entry_expr()?.into()
         };
 
-        if high_level {
-            let mut sim = HighLevelCircuitSim::new(self.compiler.package_store(), &self.fir_store);
+        // if high_level {
+        let mut sim = HighLevelCircuitSim::new(
+            self.compiler.package_store(),
+            &self.fir_store,
+            box_conditionals,
+            box_operations,
+        );
 
-            if self.quantum_seed.is_some() {
-                sim.set_seed(self.quantum_seed);
-            }
+        if self.quantum_seed.is_some() {
+            sim.set_seed(self.quantum_seed);
+        }
 
-            let val = qsc_eval::eval_take_state(
-                self.source_package,
-                self.classical_seed,
-                eval_id,
-                &self.fir_store,
-                &mut Env::default(),
-                &mut sim,
-                &mut out,
-            )
-            .map_err(|(error, call_stack)| {
-                eval_error(
-                    self.compiler.package_store(),
-                    &self.fir_store,
-                    call_stack,
-                    error,
-                )
-            })?;
-
-            Ok(sim.finish(&val))
-        } else {
-            let mut sim = BaseProfCircuitSim::new();
-
-            if self.quantum_seed.is_some() {
-                sim.set_seed(self.quantum_seed);
-            }
-
-            let val = eval(
-                self.source_package,
-                self.classical_seed,
-                eval_id,
+        let val = qsc_eval::eval_take_state(
+            self.source_package,
+            self.classical_seed,
+            eval_id,
+            &self.fir_store,
+            &mut Env::default(),
+            &mut sim,
+            &mut out,
+        )
+        .map_err(|(error, call_stack)| {
+            eval_error(
                 self.compiler.package_store(),
                 &self.fir_store,
-                &mut Env::default(),
-                &mut sim,
-                &mut out,
-            )?;
+                call_stack,
+                error,
+            )
+        })?;
 
-            Ok(sim.finish(&val))
-        }
+        Ok(sim.finish(&val))
+        // } else {
+        //     let mut sim = BaseProfCircuitSim::new();
+
+        //     if self.quantum_seed.is_some() {
+        //         sim.set_seed(self.quantum_seed);
+        //     }
+
+        //     let val = eval(
+        //         self.source_package,
+        //         self.classical_seed,
+        //         eval_id,
+        //         self.compiler.package_store(),
+        //         &self.fir_store,
+        //         &mut Env::default(),
+        //         &mut sim,
+        //         &mut out,
+        //     )?;
+
+        //     Ok(sim.finish(&val))
+        // }
     }
 
     /// Runs the given entry expression on the given simulator with a new instance of the environment

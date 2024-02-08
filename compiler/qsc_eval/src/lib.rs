@@ -423,6 +423,7 @@ impl Default for Env {
 enum Cont {
     Action(Action),
     Expr(ExprId),
+    CondExpr(ExprId),
     Frame(usize),
     Scope,
     Stmt(StmtId),
@@ -461,6 +462,7 @@ pub struct State {
     pub call_stack: CallStack,
     current_span: Span,
     rng: RefCell<StdRng>,
+    cond_stack: Vec<(StoreExprId, bool)>,
 }
 
 impl State {
@@ -477,6 +479,7 @@ impl State {
             call_stack: CallStack::default(),
             current_span: Span::default(),
             rng,
+            cond_stack: Vec::new(),
         }
     }
 
@@ -490,6 +493,10 @@ impl State {
 
     fn push_expr(&mut self, expr: ExprId) {
         self.stack.push(Cont::Expr(expr));
+    }
+
+    fn push_cond_expr(&mut self, expr: ExprId) {
+        self.stack.push(Cont::CondExpr(expr));
     }
 
     fn push_frame(
@@ -530,10 +537,9 @@ impl State {
     fn push_scope(
         &mut self,
         env: &mut Env,
-        expr_id: Option<StoreExprId>,
         context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
     ) {
-        context_receiver.push_scope(expr_id);
+        context_receiver.push_scope(self.cond_stack.pop());
 
         env.push_scope(self.call_stack.len());
         self.stack.push(Cont::Scope);
@@ -548,11 +554,10 @@ impl State {
         env: &mut Env,
         globals: &impl PackageStoreLookup,
         block: BlockId,
-        expr_id: Option<StoreExprId>,
         context_receiver: &mut impl Backend<ResultType = impl Into<val::Result>>,
     ) {
         let block = globals.get_block((self.package, block).into());
-        self.push_scope(env, expr_id, context_receiver);
+        self.push_scope(env, context_receiver);
         for stmt in block.stmts.iter().rev() {
             self.push_stmt(*stmt);
             self.push_action(Action::Consume);
@@ -610,6 +615,18 @@ impl State {
                     continue;
                 }
                 Cont::Expr(expr) => {
+                    self.cont_expr(env, globals, expr, sim)
+                        .map_err(|e| (e, self.get_stack_frames()))?;
+                    continue;
+                }
+                Cont::CondExpr(expr) => {
+                    self.cond_stack.push((
+                        StoreExprId {
+                            package: self.package,
+                            expr,
+                        },
+                        true, // preliminary
+                    ));
                     self.cont_expr(env, globals, expr, sim)
                         .map_err(|e| (e, self.get_stack_frames()))?;
                     continue;
@@ -684,7 +701,7 @@ impl State {
                 self.cont_assign_index(globals, *lhs, *mid, *rhs);
             }
             ExprKind::BinOp(op, lhs, rhs) => self.cont_binop(globals, *op, *rhs, *lhs),
-            ExprKind::Block(block) => self.push_block(env, globals, *block, None, context_receiver),
+            ExprKind::Block(block) => self.push_block(env, globals, *block, context_receiver),
             ExprKind::Call(callee_expr, args_expr) => {
                 self.cont_call(globals, *callee_expr, *args_expr);
             }
@@ -746,7 +763,7 @@ impl State {
 
     fn cont_if(&mut self, cond_expr: ExprId, then_expr: ExprId, else_expr: Option<ExprId>) {
         self.push_action(Action::If(then_expr, else_expr));
-        self.push_expr(cond_expr);
+        self.push_cond_expr(cond_expr);
     }
 
     fn cont_fail(&mut self, span: Span, fail_expr: ExprId) {
@@ -851,7 +868,7 @@ impl State {
 
     fn cont_while(&mut self, cond_expr: ExprId, block: BlockId) {
         self.push_action(Action::While(cond_expr, block));
-        self.push_expr(cond_expr);
+        self.push_cond_expr(cond_expr);
     }
 
     fn cont_call(&mut self, globals: &impl PackageStoreLookup, callee: ExprId, args: ExprId) {
@@ -1150,7 +1167,7 @@ impl State {
 
         let spec = spec_from_functor_app(functor);
         self.push_frame(callee_id, functor, sim);
-        self.push_scope(env, None, sim); // maybe we can rely on push_scope for callables as well
+        self.push_scope(env, sim); // maybe we can rely on push_scope for callables as well
         match &callee.implementation {
             CallableImpl::Intrinsic => {
                 let name = &callee.name.name;
@@ -1183,7 +1200,7 @@ impl State {
                     functor.controlled,
                     fixed_args,
                 );
-                self.push_block(env, globals, spec_decl.block, None, sim);
+                self.push_block(env, globals, spec_decl.block, sim);
                 Ok(())
             }
         }
@@ -1206,10 +1223,15 @@ impl State {
     fn eval_if(&mut self, then_expr: ExprId, else_expr: Option<ExprId>) {
         if self.pop_val().unwrap_bool() {
             self.push_expr(then_expr);
-        } else if let Some(else_expr) = else_expr {
-            self.push_expr(else_expr);
         } else {
-            self.push_val(Value::unit());
+            if let Some(cond_expr_val) = self.cond_stack.last_mut() {
+                cond_expr_val.1 = false;
+            };
+            if let Some(else_expr) = else_expr {
+                self.push_expr(else_expr);
+            } else {
+                self.push_val(Value::unit());
+            }
         }
     }
 
@@ -1437,17 +1459,9 @@ impl State {
             self.cont_while(cond_expr, block);
             self.push_action(Action::Consume);
             self.push_val(Value::unit());
-            self.push_block(
-                env,
-                globals,
-                block,
-                Some(StoreExprId {
-                    package: self.package,
-                    expr: cond_expr,
-                }),
-                context_receiver,
-            );
+            self.push_block(env, globals, block, context_receiver);
         } else {
+            self.cond_stack.pop();
             self.push_val(Value::unit());
         }
     }

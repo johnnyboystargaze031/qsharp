@@ -46,7 +46,7 @@ pub trait Backend {
     }
 
     fn set_seed(&mut self, _seed: Option<u64>) {}
-    fn push_scope(&mut self, _expr_id: Option<StoreExprId>) {}
+    fn push_scope(&mut self, _expr_id: Option<(StoreExprId, bool)>) {}
     fn pop_scope(&mut self) {}
     fn push_call(&mut self, _callable_id: StoreItemId) {}
     fn pop_call(&mut self) {}

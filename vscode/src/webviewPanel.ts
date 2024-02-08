@@ -380,11 +380,22 @@ export function registerWebViewCommands(context: ExtensionContext) {
         try {
           sendMessageToPanel("circuit", true, undefined);
 
+          const maybeConfig = editor.document.lineAt(0).text;
+          const magic = "// circuit ";
+          let boxConditionals = false;
+          let boxOperations = false;
+          let numQubits = 3;
+          if (maybeConfig.startsWith(magic)) {
+            const config = JSON.parse(maybeConfig.slice(magic.length));
+            boxConditionals = config.boxConditionals;
+            boxOperations = config.boxOperations;
+            numQubits = config.qubits;
+          }
+
           let circuit;
           let title;
           const sources = await loadProject(editor.document.uri);
           if (operationNamespace && operationName && operationDecl) {
-            const numQubits = 3;
             const code = `
 namespace ${operationNamespace} {
   operation _Invoke_${operationName}() : Result[] {
@@ -398,11 +409,17 @@ namespace ${operationNamespace} {
             circuit = await worker.getCircuit(
               sources,
               `${operationNamespace}._Invoke_${operationName}()`,
-              true,
+              boxConditionals,
+              boxOperations,
             );
             title = `${operationName} with ${numQubits} input qubits`;
           } else {
-            circuit = await worker.getCircuit(sources, "", true);
+            circuit = await worker.getCircuit(
+              sources,
+              "",
+              boxConditionals,
+              boxOperations,
+            );
             title = editor.document.uri.path.split("/").pop() || "Circuit";
           }
 

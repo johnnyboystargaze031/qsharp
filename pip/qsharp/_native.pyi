@@ -84,12 +84,10 @@ class Interpreter:
     def circuit(
         self,
         entry_expr: str,
-        high_level: bool,
     ) -> dict:
         """
         Generates a circuit from Q# source code.
 
-        :param high_level: Generate the high-level circuit instead of the hardware-specific one.
         :param entry_expr: The entry expression.
 
         :returns circuit: The circuit representation.

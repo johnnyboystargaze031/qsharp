@@ -27,7 +27,8 @@ export interface ICompiler {
   getCircuit(
     sources: [string, string][],
     expr: string,
-    highLevel: boolean,
+    boxConditionals: boolean,
+    boxOperations: boolean,
   ): Promise<object>;
   checkExerciseSolution(
     user_code: string,
@@ -85,9 +86,12 @@ export class Compiler implements ICompiler {
   async getCircuit(
     sources: [string, string][],
     expr: string,
-    highLevel: boolean,
+    boxConditionals: boolean,
+    boxOperations: boolean,
   ): Promise<object> {
-    return JSON.parse(this.wasm.get_circuit(sources, expr, highLevel));
+    return JSON.parse(
+      this.wasm.get_circuit(sources, expr, boxConditionals, boxOperations),
+    );
   }
 
   async getHir(code: string): Promise<string> {

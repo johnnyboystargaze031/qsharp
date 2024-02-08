@@ -40,7 +40,7 @@ pub fn generate_circuit(
     let unit = fir_store.get(package).expect("store should have package");
     let entry_expr = unit.entry.expect("package should have entry");
 
-    let mut sim = CircuitSim::new(store, &fir_store);
+    let mut sim = CircuitSim::new(store, &fir_store, true, true);
     let mut stdout = std::io::sink();
     let mut out = GenericReceiver::new(&mut stdout);
     let result = eval(
@@ -79,11 +79,13 @@ pub struct CircuitSim<'a> {
     fir_store: &'a dyn fir::PackageStoreLookup,
     stack: Vec<StackFrame>,
     current_box: Option<usize>,
+    box_conditionals: bool,
+    box_operations: bool,
 }
 
 enum StackFrame {
     Call(StoreItemId),
-    Scope(Option<StoreExprId>),
+    Scope(Option<(StoreExprId, bool)>),
 }
 
 impl<'a> CircuitSim<'a> {
@@ -91,6 +93,8 @@ impl<'a> CircuitSim<'a> {
     pub fn new(
         package_store: &'a PackageStore,
         fir_store: &'a dyn fir::PackageStoreLookup,
+        box_conditionals: bool,
+        box_operations: bool,
     ) -> Self {
         CircuitSim {
             next_meas_id: 0,
@@ -103,6 +107,8 @@ impl<'a> CircuitSim<'a> {
             fir_store,
             stack: Vec::new(),
             current_box: None,
+            box_conditionals,
+            box_operations,
         }
     }
 
@@ -326,9 +332,9 @@ fn rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N])
 impl Backend for CircuitSim<'_> {
     type ResultType = usize;
 
-    fn push_scope(&mut self, expr_id: Option<StoreExprId>) {
-        if self.current_box.is_none() {
-            if let Some(expr_id) = expr_id {
+    fn push_scope(&mut self, expr_id: Option<(StoreExprId, bool)>) {
+        if self.box_conditionals && self.current_box.is_none() {
+            if let Some((expr_id, val)) = expr_id {
                 let user_package = self
                     .stack
                     .iter()
@@ -364,7 +370,11 @@ impl Backend for CircuitSim<'_> {
                             info!("opened box {expr_source} at {}", self.stack.len());
 
                             self.circuit.operations.push(Operation {
-                                gate: expr_source,
+                                gate: if val {
+                                    expr_source
+                                } else {
+                                    format!("!({expr_source})")
+                                },
                                 display_args: None,
                                 is_controlled: false,
                                 is_adjoint: false,
@@ -394,7 +404,7 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn push_call(&mut self, callable_id: fir::StoreItemId) {
-        if self.current_box.is_none() {
+        if self.box_operations && self.current_box.is_none() {
             let user_package = self
                 .stack
                 .iter()
