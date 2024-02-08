@@ -10,10 +10,10 @@ use num_bigint::BigUint;
 use num_complex::Complex;
 use qsc_data_structures::index_map::IndexMap;
 use qsc_eval::{
-    backend::Backend,
+    backend::{Backend, SparseSim},
     debug::{map_fir_package_to_hir, map_hir_package_to_fir, Frame},
     eval,
-    output::GenericReceiver,
+    output::{fmt_complex, format_state_id, GenericReceiver},
     val::Value,
     Env,
 };
@@ -22,6 +22,7 @@ use qsc_frontend::compile::PackageStore;
 use qsc_hir::hir::{self};
 use rustc_hash::FxHashSet;
 use std::fmt::Display;
+use std::fmt::Write;
 
 pub fn generate_circuit(
     store: &PackageStore,
@@ -71,7 +72,7 @@ pub struct CircuitSim<'a> {
     #[allow(dead_code)]
     package_store: &'a PackageStore,
     next_meas_id: usize,
-    next_qubit_id: usize,
+    // next_qubit_id: usize,
     next_qubit_hardware_id: HardwareId,
     qubit_map: IndexMap<usize, HardwareId>,
     circuit: Circuit,
@@ -81,6 +82,7 @@ pub struct CircuitSim<'a> {
     current_box: Option<usize>,
     box_conditionals: bool,
     box_operations: bool,
+    sparse_sim: SparseSim,
 }
 
 enum StackFrame {
@@ -98,7 +100,7 @@ impl<'a> CircuitSim<'a> {
     ) -> Self {
         CircuitSim {
             next_meas_id: 0,
-            next_qubit_id: 0,
+            // next_qubit_id: 0,
             next_qubit_hardware_id: HardwareId::default(),
             qubit_map: IndexMap::new(),
             circuit: Circuit::default(),
@@ -109,6 +111,7 @@ impl<'a> CircuitSim<'a> {
             current_box: None,
             box_conditionals,
             box_operations,
+            sparse_sim: SparseSim::new(),
         }
     }
 
@@ -464,6 +467,7 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn ccx(&mut self, ctl0: usize, ctl1: usize, q: usize) {
+        self.sparse_sim.ccx(ctl0, ctl1, q);
         let ctl0 = self.map(ctl0);
         let ctl1 = self.map(ctl1);
         let q = self.map(q);
@@ -476,29 +480,34 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn cx(&mut self, ctl: usize, q: usize) {
+        self.sparse_sim.cx(ctl, q);
         let ctl = self.map(ctl);
         let q = self.map(q);
         self.push_gate(controlled_gate("X", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn cy(&mut self, ctl: usize, q: usize) {
+        self.sparse_sim.cy(ctl, q);
         let ctl = self.map(ctl);
         let q = self.map(q);
         self.push_gate(controlled_gate("Y", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn cz(&mut self, ctl: usize, q: usize) {
+        self.sparse_sim.cz(ctl, q);
         let ctl = self.map(ctl);
         let q = self.map(q);
         self.push_gate(controlled_gate("Z", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn h(&mut self, q: usize) {
+        self.sparse_sim.h(q);
         let q = self.map(q);
         self.push_gate(gate("H", [Qubit(q)]));
     }
 
     fn m(&mut self, q: usize) -> Self::ResultType {
+        // don't measure in the sparse sim, no point
         let mapped_q = self.map(q);
         let id = self.get_meas_id();
         // Measurements are tracked separately from instructions, so that they can be
@@ -509,10 +518,12 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn mresetz(&mut self, q: usize) -> Self::ResultType {
+        // don't measure in the sparse sim, no point
         self.m(q)
     }
 
     fn reset(&mut self, q: usize) {
+        self.sparse_sim.reset(q);
         // Reset is a no-op in Base Profile, but does force qubit remapping so that future
         // operations on the given qubit id are performed on a fresh qubit. Clear the entry in the map
         // so it is known to require remapping on next use.
@@ -520,91 +531,138 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn rx(&mut self, theta: f64, q: usize) {
+        self.sparse_sim.rx(theta, q);
         let q = self.map(q);
         self.push_gate(rotation_gate("rx", Double(theta), [Qubit(q)]));
     }
 
     fn rxx(&mut self, theta: f64, q0: usize, q1: usize) {
+        self.sparse_sim.rxx(theta, q0, q1);
         let q0 = self.map(q0);
         let q1 = self.map(q1);
         self.push_gate(rotation_gate("rxx", Double(theta), [Qubit(q0), Qubit(q1)]));
     }
 
     fn ry(&mut self, theta: f64, q: usize) {
+        self.sparse_sim.ry(theta, q);
         let q = self.map(q);
         self.push_gate(rotation_gate("ry", Double(theta), [Qubit(q)]));
     }
 
     fn ryy(&mut self, theta: f64, q0: usize, q1: usize) {
+        self.sparse_sim.ryy(theta, q0, q1);
         let q0 = self.map(q0);
         let q1 = self.map(q1);
         self.push_gate(rotation_gate("ryy", Double(theta), [Qubit(q0), Qubit(q1)]));
     }
 
     fn rz(&mut self, theta: f64, q: usize) {
+        self.sparse_sim.rz(theta, q);
         let q = self.map(q);
         self.push_gate(rotation_gate("rz", Double(theta), [Qubit(q)]));
     }
 
     fn rzz(&mut self, theta: f64, q0: usize, q1: usize) {
+        self.sparse_sim.rzz(theta, q0, q1);
         let q0 = self.map(q0);
         let q1 = self.map(q1);
         self.push_gate(rotation_gate("rzz", Double(theta), [Qubit(q0), Qubit(q1)]));
     }
 
     fn sadj(&mut self, q: usize) {
+        self.sparse_sim.sadj(q);
         let q = self.map(q);
         self.push_gate(adjoint_gate("S", [Qubit(q)]));
     }
 
     fn s(&mut self, q: usize) {
+        self.sparse_sim.s(q);
         let q = self.map(q);
         self.push_gate(gate("S", [Qubit(q)]));
     }
 
     fn swap(&mut self, q0: usize, q1: usize) {
+        self.sparse_sim.swap(q0, q1);
         let q0 = self.map(q0);
         let q1 = self.map(q1);
         self.push_gate(gate("SWAP", [Qubit(q0), Qubit(q1)]));
     }
 
     fn tadj(&mut self, q: usize) {
+        self.sparse_sim.tadj(q);
         let q = self.map(q);
         self.push_gate(adjoint_gate("T", [Qubit(q)]));
     }
 
     fn t(&mut self, q: usize) {
+        self.sparse_sim.t(q);
         let q = self.map(q);
         self.push_gate(gate("T", [Qubit(q)]));
     }
 
     fn x(&mut self, q: usize) {
+        self.sparse_sim.x(q);
         let q = self.map(q);
         self.push_gate(gate("X", [Qubit(q)]));
     }
 
     fn y(&mut self, q: usize) {
+        self.sparse_sim.y(q);
         let q = self.map(q);
         self.push_gate(gate("Y", [Qubit(q)]));
     }
 
     fn z(&mut self, q: usize) {
+        self.sparse_sim.z(q);
         let q = self.map(q);
         self.push_gate(gate("Z", [Qubit(q)]));
     }
 
     fn qubit_allocate(&mut self) -> usize {
-        let id = self.next_qubit_id;
-        self.next_qubit_id += 1;
+        let id = self.sparse_sim.qubit_allocate();
+        // let id = self.next_qubit_id;
+        // self.next_qubit_id += 1;
         let _ = self.map(id);
         id
     }
 
-    fn qubit_release(&mut self, _q: usize) {
-        self.next_qubit_id -= 1;
+    fn qubit_release(&mut self, q: usize) {
+        self.sparse_sim.qubit_release(q);
+        // self.next_qubit_id -= 1;
     }
 
     fn capture_quantum_state(&mut self) -> (Vec<(BigUint, Complex<f64>)>, usize) {
+        let (state, qubit_count) = self.sparse_sim.capture_quantum_state();
+
+        let mut st = String::new();
+        writeln!(st, "STATE:\n").expect("string write should succeed");
+        for (id, state) in state {
+            writeln!(
+                st,
+                "{}: {}\n",
+                format_state_id(&id, qubit_count),
+                fmt_complex(&state),
+            )
+            .expect("string write should succeed");
+        }
+
+        self.push_gate(Operation {
+            gate: st,
+            display_args: None,
+            is_controlled: false,
+            is_adjoint: false,
+            is_measurement: false,
+            controls: vec![],
+            targets: (0..(self.next_qubit_hardware_id.0))
+                .map(|i| Register {
+                    q_id: i,
+                    c_id: None,
+                    r#type: 0,
+                })
+                .collect(),
+            children: vec![],
+        });
+
         (Vec::new(), 0)
     }
 
@@ -619,20 +677,20 @@ impl Backend for CircuitSim<'_> {
 
 struct Qubit(HardwareId);
 
-impl Display for Qubit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{ \"qId\": {} }}", self.0 .0)
-    }
-}
+// impl Display for Qubit {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{{ \"qId\": {} }}", self.0 .0)
+//     }
+// }
 
 #[derive(Copy, Clone)]
 struct Result(usize);
 
-impl Display for Result {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RESULT{}", self.0)
-    }
-}
+// impl Display for Result {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "RESULT{}", self.0)
+//     }
+// }
 
 #[derive(Copy, Clone)]
 struct Double(f64);
