@@ -394,7 +394,7 @@ impl Default for Env {
 }
 
 enum Cont {
-    Action(Action),
+    Action,
     Expr(ExprId),
     CondExpr(ExprId),
     Frame(usize),
@@ -429,7 +429,8 @@ enum Action {
 }
 
 pub struct State {
-    stack: Vec<Cont>,
+    cont_stack: Vec<Cont>,
+    action_stack: Vec<Action>,
     vals: Vec<Value>,
     package: PackageId,
     pub call_stack: CallStack,
@@ -446,7 +447,8 @@ impl State {
             None => RefCell::new(StdRng::from_entropy()),
         };
         Self {
-            stack: Vec::new(),
+            cont_stack: Vec::new(),
+            action_stack: Vec::new(),
             vals: Vec::new(),
             package,
             call_stack: CallStack::default(),
@@ -457,15 +459,21 @@ impl State {
     }
 
     fn pop_cont(&mut self) -> Option<Cont> {
-        self.stack.pop()
+        self.cont_stack.pop()
     }
 
     fn push_action(&mut self, action: Action) {
-        self.stack.push(Cont::Action(action));
+        self.cont_stack.push(Cont::Action);
+        self.action_stack.push(action);
     }
 
     fn push_expr(&mut self, expr: ExprId) {
-        self.stack.push(Cont::Expr(expr));
+        self.cont_stack.push(Cont::Expr(expr));
+    }
+
+    fn push_exprs(&mut self, exprs: &[ExprId]) {
+        self.cont_stack
+            .extend(exprs.iter().rev().map(|expr| Cont::Expr(*expr)));
     }
 
     fn push_cond_expr(&mut self, expr: ExprId) {
@@ -486,7 +494,7 @@ impl State {
             caller: self.package,
             functor,
         });
-        self.stack.push(Cont::Frame(self.vals.len()));
+        self.cont_stack.push(Cont::Frame(self.vals.len()));
         self.package = id.package;
     }
 
@@ -515,11 +523,11 @@ impl State {
         context_receiver.push_scope(self.cond_stack.pop());
 
         env.push_scope(self.call_stack.len());
-        self.stack.push(Cont::Scope);
+        self.cont_stack.push(Cont::Scope);
     }
 
     fn push_stmt(&mut self, stmt: StmtId) {
-        self.stack.push(Cont::Stmt(stmt));
+        self.cont_stack.push(Cont::Stmt(stmt));
     }
 
     fn push_block(
@@ -537,8 +545,8 @@ impl State {
         }
         if block.stmts.is_empty() {
             self.push_val(Value::unit());
-        } else {
-            self.pop_cont();
+        } else if let Some(Cont::Action) = self.pop_cont() {
+            self.action_stack.pop();
         }
     }
 
@@ -582,7 +590,8 @@ impl State {
 
         while let Some(cont) = self.pop_cont() {
             let res = match cont {
-                Cont::Action(action) => {
+                Cont::Action => {
+                    let action = self.action_stack.pop().expect("action should be present");
                     self.cont_action(env, sim, globals, action, out)
                         .map_err(|e| (e, self.get_stack_frames()))?;
                     continue;
@@ -710,16 +719,12 @@ impl State {
 
     fn cont_tup(&mut self, tup: &Vec<ExprId>) {
         self.push_action(Action::Tuple(tup.len()));
-        for tup_expr in tup.iter().rev() {
-            self.push_expr(*tup_expr);
-        }
+        self.push_exprs(tup);
     }
 
     fn cont_arr(&mut self, arr: &Vec<ExprId>) {
         self.push_action(Action::Array(arr.len()));
-        for entry in arr.iter().rev() {
-            self.push_expr(*entry);
-        }
+        self.push_exprs(arr);
     }
 
     fn cont_arr_repeat(&mut self, globals: &impl PackageStoreLookup, item: ExprId, size: ExprId) {
@@ -1260,6 +1265,9 @@ impl State {
                 Cont::Scope => {
                     context_receiver.pop_scope();
                     env.leave_scope();
+                }
+                Cont::Action => {
+                    self.action_stack.pop();
                 }
                 _ => {}
             }
