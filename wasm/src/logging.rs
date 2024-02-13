@@ -23,6 +23,7 @@ extern "C" {
     #[wasm_bindgen(js_name = Error)]
     static ERROR: ErrorConstructor;
 
+    // TODO: use #[wasm_bindgen(static_method_of = Object)]
     #[wasm_bindgen(method, getter  = stackTraceLimit)]
     fn get_stack_trace_limit(this: &ErrorConstructor) -> Option<u32>;
 

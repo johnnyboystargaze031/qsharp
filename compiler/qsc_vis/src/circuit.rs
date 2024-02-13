@@ -4,13 +4,13 @@
 use serde::Serialize;
 use std::ops::Not;
 
-#[derive(Serialize, Default, Debug)]
+#[derive(Clone, Serialize, Default, Debug, PartialEq)]
 pub struct Circuit {
     pub operations: Vec<Operation>,
     pub qubits: Vec<Qubit>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Clone, Serialize, Debug, PartialEq)]
 pub struct Operation {
     #[allow(clippy::struct_field_names)]
     pub gate: String,
@@ -43,9 +43,20 @@ pub struct Register {
     pub c_id: Option<usize>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(PartialEq, Clone, Serialize, Debug)]
 pub struct Qubit {
     pub id: usize,
     #[serde(rename = "numChildren")]
     pub num_children: usize,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, Copy, Default)]
+pub struct Config {
+    pub box_conditionals: bool,
+    pub box_operations: bool,
+    pub max_depth: usize,
+    pub qubit_reuse: bool,
+    /// Perf note: Will enable the sparse state simulator
+    pub show_state_dumps: bool,
 }

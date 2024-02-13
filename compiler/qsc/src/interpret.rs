@@ -15,15 +15,15 @@ pub use qsc_eval::{
     val::Value,
     StepAction, StepResult,
 };
-// use qsc_vis::base_prof::CircuitSim as BaseProfCircuitSim;
 use qsc_vis::high_level::CircuitSim as HighLevelCircuitSim;
-pub use qsc_vis::{Circuit, Operation};
+pub use qsc_vis::{Circuit, Config as CircuitConfig, Operation};
 
 use crate::{
     error::{self, WithStack},
     incremental::Compiler,
 };
 use debug::format_call_stack;
+use log::debug;
 use miette::Diagnostic;
 use num_bigint::BigUint;
 use num_complex::Complex;
@@ -294,10 +294,7 @@ impl Interpreter {
 
     pub fn circuit(
         &mut self,
-        box_conditionals: bool,
-        box_operations: bool,
-        qubit_reuse: bool,
-        show_state_dumps: bool,
+        circuit_config: CircuitConfig,
         expr: Option<&str>,
     ) -> Result<Circuit, Vec<Error>> {
         // if self.capabilities != RuntimeCapabilityFlags::empty() {
@@ -317,17 +314,14 @@ impl Interpreter {
         let mut sim = HighLevelCircuitSim::new(
             self.compiler.package_store(),
             &self.fir_store,
-            box_conditionals,
-            box_operations,
-            qubit_reuse,
-            show_state_dumps,
+            circuit_config,
         );
 
         if self.quantum_seed.is_some() {
             sim.set_seed(self.quantum_seed);
         }
 
-        let val = qsc_eval::eval_take_state(
+        let val = qsc_eval::eval(
             self.source_package,
             self.classical_seed,
             eval_id,
@@ -346,26 +340,108 @@ impl Interpreter {
         })?;
 
         Ok(sim.finish(&val))
-        // } else {
-        //     let mut sim = BaseProfCircuitSim::new();
+    }
 
-        //     if self.quantum_seed.is_some() {
-        //         sim.set_seed(self.quantum_seed);
-        //     }
+    pub fn circuit_evolution(
+        &mut self,
+        circuit_config: CircuitConfig,
+        iterations: usize,
+    ) -> Result<Vec<Circuit>, Vec<Error>> {
+        if self.capabilities != RuntimeCapabilityFlags::empty() {
+            return Err(vec![Error::UnsupportedRuntimeCapabilities]);
+        }
 
-        //     let val = eval(
-        //         self.source_package,
-        //         self.classical_seed,
-        //         eval_id,
-        //         self.compiler.package_store(),
-        //         &self.fir_store,
-        //         &mut Env::default(),
-        //         &mut sim,
-        //         &mut out,
-        //     )?;
+        let mut stdout = std::io::sink();
+        let mut out = GenericReceiver::new(&mut stdout);
 
-        //     Ok(sim.finish(&val))
-        // }
+        let mut sim = HighLevelCircuitSim::new(
+            self.compiler.package_store(),
+            &self.fir_store,
+            circuit_config,
+        );
+
+        if self.quantum_seed.is_some() {
+            sim.set_seed(self.quantum_seed);
+        }
+
+        let mut env = Env::default();
+        let mut state = State::new(self.source_package, None);
+        let expr = self.get_entry_expr()?;
+
+        qsc_eval::eval_push_expr(&mut state, expr);
+
+        let mut circuits = vec![];
+
+        let breakpoints = self
+            .fir_store
+            .get(self.source_package)
+            .expect("shource package should exist")
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                let stmts = &b.1.stmts;
+                if stmts.is_empty() {
+                    None
+                } else {
+                    Some(stmts[stmts.len() - 1])
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for _ in 0..iterations {
+            let result = state
+                .eval(
+                    &self.fir_store,
+                    &mut env,
+                    &mut sim,
+                    &mut out,
+                    &breakpoints,
+                    StepAction::Continue,
+                )
+                .map_err(|(error, call_stack)| {
+                    eval_error(
+                        self.compiler.package_store(),
+                        &self.fir_store,
+                        call_stack,
+                        error,
+                    )
+                })?;
+
+            if let StepResult::BreakpointHit(stmt_id) = result {
+                debug!("breakpoint hit: {:?}", stmt_id);
+                let stmt = self.fir_store.get_stmt(fir::StoreStmtId {
+                    package: self.source_package,
+                    stmt: stmt_id,
+                });
+                let sources = &self
+                    .compiler
+                    .package_store()
+                    .get(map_fir_package_to_hir(self.source_package))
+                    .expect("hir package should exist")
+                    .sources;
+                let source = sources
+                    .find_by_offset(stmt.span.lo)
+                    .expect("source should exist");
+                let stmt_span_source_relative = stmt.span - source.offset;
+                let stmt_source = source.contents
+                    [stmt_span_source_relative.lo as usize..stmt_span_source_relative.hi as usize]
+                    .to_string();
+                println!("> {stmt_source}");
+            }
+
+            let this = sim.snapshot();
+            if circuits.last().map_or(true, |c| *c != this) {
+                println!("pushing circuit snapshot");
+                circuits.push(this);
+            }
+
+            if let StepResult::Return(_) = result {
+                debug!("program complete, returning circuits");
+                break;
+            }
+        }
+
+        Ok(circuits)
     }
 
     /// Runs the given entry expression on the given simulator with a new instance of the environment
@@ -557,14 +633,7 @@ impl Debugger {
                 self.position_encoding,
             );
             collector.visit_package(package);
-            let mut spans: Vec<_> = collector
-                .statements
-                .iter()
-                .map(|bps| BreakpointSpan {
-                    id: bps.id,
-                    range: bps.range,
-                })
-                .collect();
+            let mut spans: Vec<_> = collector.statements.into_iter().collect();
 
             // Sort by start position (line first, column next)
             spans.sort_by_key(|s| (s.range.start.line, s.range.start.column));

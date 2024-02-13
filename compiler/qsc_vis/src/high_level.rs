@@ -1,14 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#[cfg(test)]
-mod tests;
-
-use crate::circuit::{Circuit, Operation, Register};
-use log::info;
+use crate::{
+    circuit::{Circuit, Operation, Register},
+    Config,
+};
+use log::debug;
 use num_bigint::BigUint;
 use num_complex::Complex;
-use qsc_data_structures::index_map::IndexMap;
+use qsc_data_structures::{
+    index_map::IndexMap,
+    line_column::{Encoding, Position},
+};
 use qsc_eval::{
     backend::{Backend, SparseSim},
     debug::{map_fir_package_to_hir, map_hir_package_to_fir, Frame},
@@ -21,7 +24,6 @@ use qsc_fir::fir::{self, Global, StoreExprId, StoreItemId};
 use qsc_frontend::compile::PackageStore;
 use qsc_hir::hir::{self};
 use rustc_hash::FxHashSet;
-use std::fmt::Display;
 use std::fmt::Write;
 
 pub fn generate_circuit(
@@ -41,7 +43,17 @@ pub fn generate_circuit(
     let unit = fir_store.get(package).expect("store should have package");
     let entry_expr = unit.entry.expect("package should have entry");
 
-    let mut sim = CircuitSim::new(store, &fir_store, true, true, true, true);
+    let mut sim = CircuitSim::new(
+        store,
+        &fir_store,
+        Config {
+            box_conditionals: true,
+            box_operations: true,
+            qubit_reuse: true,
+            show_state_dumps: true,
+            max_depth: 1,
+        },
+    );
     let mut stdout = std::io::sink();
     let mut out = GenericReceiver::new(&mut stdout);
     let result = eval(
@@ -72,19 +84,16 @@ pub struct CircuitSim<'a> {
     #[allow(dead_code)]
     package_store: &'a PackageStore,
     next_meas_id: usize,
-    // next_qubit_id: usize,
+    next_qubit_id: usize,
     next_qubit_hardware_id: HardwareId,
     qubit_map: IndexMap<usize, HardwareId>,
     circuit: Circuit,
     measurements: Vec<(Qubit, Result)>,
     fir_store: &'a dyn fir::PackageStoreLookup,
     stack: Vec<StackFrame>,
-    current_box: Option<usize>,
-    box_conditionals: bool,
-    box_operations: bool,
-    sparse_sim: SparseSim,
-    qubit_reuse: bool,
-    show_state_dumps: bool,
+    current_boxes: Vec<usize>,
+    sparse_sim: Option<SparseSim>,
+    config: Config,
 }
 
 enum StackFrame {
@@ -97,14 +106,11 @@ impl<'a> CircuitSim<'a> {
     pub fn new(
         package_store: &'a PackageStore,
         fir_store: &'a dyn fir::PackageStoreLookup,
-        box_conditionals: bool,
-        box_operations: bool,
-        qubit_reuse: bool,
-        show_state_dumps: bool,
+        config: Config,
     ) -> Self {
         CircuitSim {
             next_meas_id: 0,
-            // next_qubit_id: 0,
+            next_qubit_id: 0,
             next_qubit_hardware_id: HardwareId::default(),
             qubit_map: IndexMap::new(),
             circuit: Circuit::default(),
@@ -112,48 +118,74 @@ impl<'a> CircuitSim<'a> {
             package_store,
             fir_store,
             stack: Vec::new(),
-            current_box: None,
-            box_conditionals,
-            box_operations,
-            sparse_sim: SparseSim::new(),
-            qubit_reuse,
-            show_state_dumps,
+            current_boxes: Vec::new(),
+            config,
+            sparse_sim: if config.show_state_dumps {
+                Some(SparseSim::new())
+            } else {
+                None
+            },
         }
     }
 
     #[must_use]
-    pub fn finish(mut self, _val: &Value) -> Circuit {
-        for operation in &mut self.circuit.operations {
-            let mut operation_targets = FxHashSet::<Register>::default();
-            let mut operation_controls = FxHashSet::<Register>::default();
-            if !operation.children.is_empty() {
-                for child in &operation.children {
-                    for target in &child.targets {
-                        operation_targets.insert(target.clone());
+    pub fn snapshot(&self) -> Circuit {
+        debug!("taking circuit snapshot");
+        let mut circuit = self.circuit.clone();
+        populate_wires_from_children(&mut circuit.operations);
+
+        if !self.config.qubit_reuse {
+            let by_qubit = self.measurements.iter().fold(
+                IndexMap::default(),
+                |mut map: IndexMap<usize, Vec<Result>>, (q, r)| {
+                    match map.get_mut(q.0 .0) {
+                        Some(rs) => rs.push(*r),
+                        None => {
+                            map.insert(q.0 .0, vec![*r]);
+                        }
                     }
-                    for control in &child.controls {
-                        operation_controls.insert(control.clone());
-                    }
+                    map
+                },
+            );
+
+            for (qubit, results) in &by_qubit {
+                for result in results {
+                    circuit.operations.push(measurement_gate(qubit, result.0));
                 }
-                operation.targets = operation_targets.into_iter().collect();
-                operation.controls = operation_controls.into_iter().collect();
             }
         }
 
-        let by_qubit = self.measurements.iter().fold(
-            IndexMap::default(),
-            |mut map: IndexMap<usize, Vec<Result>>, (q, r)| {
-                match map.get_mut(q.0 .0) {
-                    Some(rs) => rs.push(*r),
-                    None => {
-                        map.insert(q.0 .0, vec![*r]);
-                    }
-                }
-                map
-            },
-        );
+        // qubits
 
-        if !self.qubit_reuse {
+        for i in 0..self.next_qubit_hardware_id.0 {
+            let num_measurements = self.measurements.iter().filter(|m| m.0 .0 .0 == i).count();
+            circuit.qubits.push(crate::circuit::Qubit {
+                id: i,
+                num_children: num_measurements,
+            });
+        }
+
+        circuit
+    }
+
+    #[must_use]
+    pub fn finish(mut self, _val: &Value) -> Circuit {
+        populate_wires_from_children(&mut self.circuit.operations);
+
+        if !self.config.qubit_reuse {
+            let by_qubit = self.measurements.iter().fold(
+                IndexMap::default(),
+                |mut map: IndexMap<usize, Vec<Result>>, (q, r)| {
+                    match map.get_mut(q.0 .0) {
+                        Some(rs) => rs.push(*r),
+                        None => {
+                            map.insert(q.0 .0, vec![*r]);
+                        }
+                    }
+                    map
+                },
+            );
+
             for (qubit, results) in &by_qubit {
                 for result in results {
                     self.push_gate(measurement_gate(qubit, result.0));
@@ -193,19 +225,48 @@ impl<'a> CircuitSim<'a> {
     }
 
     fn push_gate(&mut self, gate: Operation) {
-        let operations = if self.current_box.is_some() {
-            info!("pushing gate {} into box", gate.gate);
-            &mut self
-                .circuit
-                .operations
+        let mut operations = &mut self.circuit.operations;
+        for _ in 0..self.current_boxes.len() {
+            operations = &mut operations
                 .last_mut()
                 .expect("expected an operation to be in the list")
-                .children
-        } else {
-            info!("pushing gate {} at top level", gate.gate);
-            &mut self.circuit.operations
-        };
+                .children;
+        }
+
         operations.push(gate);
+        // let operations = if self.current_boxes.is_some() {
+        //     debug!("pushing gate {} into box", gate.gate);
+        //     &mut self
+        //         .circuit
+        //         .operations
+        //         .last_mut()
+        //         .expect("expected an operation to be in the list")
+        //         .children
+        // } else {
+        //     debug!("pushing gate {} at top level", gate.gate);
+        //     &mut self.circuit.operations
+        // };
+        // operations.push(gate);
+    }
+}
+
+fn populate_wires_from_children(operations: &mut [Operation]) {
+    for operation in operations {
+        let mut operation_targets = FxHashSet::<Register>::default();
+        let mut operation_controls = FxHashSet::<Register>::default();
+        if !operation.children.is_empty() {
+            populate_wires_from_children(&mut operation.children);
+            for child in &operation.children {
+                for target in &child.targets {
+                    operation_targets.insert(target.clone());
+                }
+                for control in &child.controls {
+                    operation_controls.insert(control.clone());
+                }
+            }
+            operation.targets = operation_targets.into_iter().collect();
+            operation.controls = operation_controls.into_iter().collect();
+        }
     }
 }
 
@@ -319,10 +380,10 @@ fn measurement_gate(qubit: usize, _result: usize) -> Operation {
     }
 }
 
-fn rotation_gate<const N: usize>(name: &str, theta: Double, targets: [Qubit; N]) -> Operation {
+fn rotation_gate<const N: usize>(name: &str, theta: f64, targets: [Qubit; N]) -> Operation {
     Operation {
         gate: name.into(),
-        display_args: Some(format!("{theta}")),
+        display_args: Some(format!("{theta:.4}")),
         is_controlled: false,
         is_adjoint: false,
         is_measurement: false,
@@ -343,7 +404,7 @@ impl Backend for CircuitSim<'_> {
     type ResultType = usize;
 
     fn push_scope(&mut self, expr_id: Option<(StoreExprId, bool)>) {
-        if self.box_conditionals && self.current_box.is_none() {
+        if self.config.box_conditionals && self.current_boxes.len() < self.config.max_depth {
             if let Some((expr_id, val)) = expr_id {
                 let user_package = self
                     .stack
@@ -356,7 +417,7 @@ impl Backend for CircuitSim<'_> {
                             unreachable!()
                         }
                     });
-                info!("user_package = {user_package:?}");
+                debug!("user_package = {user_package:?}");
 
                 if let Some(user_package) = user_package {
                     if expr_id.package == user_package {
@@ -369,17 +430,24 @@ impl Backend for CircuitSim<'_> {
                                 let source = unit.sources.find_by_offset(expr.span.lo);
                                 source.map(|source| {
                                     let source_span = expr.span - source.offset;
-                                    source.contents.as_ref()
-                                        [source_span.lo as usize..source_span.hi as usize]
-                                        .to_string()
+                                    let position = Position::from_utf8_byte_offset(
+                                        Encoding::Utf8,
+                                        &source.contents,
+                                        source_span.lo,
+                                    );
+                                    format!(
+                                        "{} (line {})",
+                                        &source.contents.as_ref()
+                                            [source_span.lo as usize..source_span.hi as usize],
+                                        position.line + 1
+                                    )
                                 })
                             });
 
                         if let Some(expr_source) = expr_source {
-                            self.current_box = Some(self.stack.len());
-                            info!("opened box {expr_source} at {}", self.stack.len());
+                            debug!("opened box {expr_source} at {}", self.stack.len());
 
-                            self.circuit.operations.push(Operation {
+                            self.push_gate(Operation {
                                 gate: if val {
                                     expr_source
                                 } else {
@@ -393,6 +461,7 @@ impl Backend for CircuitSim<'_> {
                                 targets: vec![],
                                 children: vec![],
                             });
+                            self.current_boxes.push(self.stack.len());
                         }
                     }
                 }
@@ -405,16 +474,16 @@ impl Backend for CircuitSim<'_> {
     fn pop_scope(&mut self) {
         self.stack.pop();
 
-        if let Some(stack_idx_for_box) = self.current_box {
-            if self.stack.len() == stack_idx_for_box {
-                self.current_box = None;
-                info!("closed box at {stack_idx_for_box}");
+        if let Some(stack_idx_for_box) = self.current_boxes.last() {
+            if self.stack.len() == *stack_idx_for_box {
+                debug!("closed box at {stack_idx_for_box}");
+                self.current_boxes.pop();
             }
         }
     }
 
     fn push_call(&mut self, callable_id: fir::StoreItemId) {
-        if self.box_operations && self.current_box.is_none() {
+        if self.config.box_operations && self.current_boxes.len() < self.config.max_depth {
             let user_package = self
                 .stack
                 .iter()
@@ -426,11 +495,11 @@ impl Backend for CircuitSim<'_> {
                         unreachable!()
                     }
                 });
-            info!("user_package = {user_package:?}");
+            debug!("user_package = {user_package:?}");
 
             if let Some(user_package) = user_package {
                 if callable_id.package == user_package {
-                    info!("caller package id = {}", callable_id.package);
+                    debug!("caller package id = {}", callable_id.package);
 
                     let caller_name =
                         self.fir_store
@@ -441,9 +510,7 @@ impl Backend for CircuitSim<'_> {
                             });
 
                     if let Some(caller_name) = caller_name {
-                        self.current_box = Some(self.stack.len());
-
-                        self.circuit.operations.push(Operation {
+                        self.push_gate(Operation {
                             gate: caller_name.into(),
                             display_args: None,
                             is_controlled: false,
@@ -453,7 +520,8 @@ impl Backend for CircuitSim<'_> {
                             targets: vec![],
                             children: vec![],
                         });
-                        info!("opened box {caller_name} at {}", self.stack.len());
+                        debug!("opened box {caller_name} at {}", self.stack.len());
+                        self.current_boxes.push(self.stack.len());
                     }
                 }
             }
@@ -465,16 +533,18 @@ impl Backend for CircuitSim<'_> {
     fn pop_call(&mut self) {
         self.stack.pop();
 
-        if let Some(stack_idx_for_box) = self.current_box {
-            if self.stack.len() == stack_idx_for_box {
-                self.current_box = None;
-                info!("closed box at {stack_idx_for_box}");
+        if let Some(stack_idx_for_box) = self.current_boxes.last() {
+            if self.stack.len() == *stack_idx_for_box {
+                debug!("closed box at {stack_idx_for_box}");
+                self.current_boxes.pop();
             }
         }
     }
 
     fn ccx(&mut self, ctl0: usize, ctl1: usize, q: usize) {
-        self.sparse_sim.ccx(ctl0, ctl1, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.ccx(ctl0, ctl1, q);
+        }
         let ctl0 = self.map(ctl0);
         let ctl1 = self.map(ctl1);
         let q = self.map(q);
@@ -487,28 +557,36 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn cx(&mut self, ctl: usize, q: usize) {
-        self.sparse_sim.cx(ctl, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.cx(ctl, q);
+        }
         let ctl = self.map(ctl);
         let q = self.map(q);
         self.push_gate(controlled_gate("X", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn cy(&mut self, ctl: usize, q: usize) {
-        self.sparse_sim.cy(ctl, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.cy(ctl, q);
+        }
         let ctl = self.map(ctl);
         let q = self.map(q);
         self.push_gate(controlled_gate("Y", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn cz(&mut self, ctl: usize, q: usize) {
-        self.sparse_sim.cz(ctl, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.cz(ctl, q);
+        }
         let ctl = self.map(ctl);
         let q = self.map(q);
         self.push_gate(controlled_gate("Z", [Qubit(ctl)], [Qubit(q)]));
     }
 
     fn h(&mut self, q: usize) {
-        self.sparse_sim.h(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.h(q);
+        }
         let q = self.map(q);
         self.push_gate(gate("H", [Qubit(q)]));
     }
@@ -519,7 +597,7 @@ impl Backend for CircuitSim<'_> {
         let id = self.get_meas_id();
         // Measurements are tracked separately from instructions, so that they can be
         // deferred until the end of the program.
-        if self.qubit_reuse {
+        if self.config.qubit_reuse {
             self.push_gate(measurement_gate(mapped_q.0, id));
         }
         self.measurements.push((Qubit(mapped_q), Result(id)));
@@ -533,9 +611,10 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn reset(&mut self, q: usize) {
-        self.sparse_sim.reset(q);
-
-        if !self.qubit_reuse {
+        if let Some(ref mut s) = self.sparse_sim {
+            s.reset(q);
+        }
+        if !self.config.qubit_reuse {
             // Reset is a no-op in Base Profile, but does force qubit remapping so that future
             // operations on the given qubit id are performed on a fresh qubit. Clear the entry in the map
             // so it is known to require remapping on next use.
@@ -544,111 +623,151 @@ impl Backend for CircuitSim<'_> {
     }
 
     fn rx(&mut self, theta: f64, q: usize) {
-        self.sparse_sim.rx(theta, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.rx(theta, q);
+        }
         let q = self.map(q);
-        self.push_gate(rotation_gate("rx", Double(theta), [Qubit(q)]));
+        self.push_gate(rotation_gate("rx", theta, [Qubit(q)]));
     }
 
     fn rxx(&mut self, theta: f64, q0: usize, q1: usize) {
-        self.sparse_sim.rxx(theta, q0, q1);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.rxx(theta, q0, q1);
+        }
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.push_gate(rotation_gate("rxx", Double(theta), [Qubit(q0), Qubit(q1)]));
+        self.push_gate(rotation_gate("rxx", theta, [Qubit(q0), Qubit(q1)]));
     }
 
     fn ry(&mut self, theta: f64, q: usize) {
-        self.sparse_sim.ry(theta, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.ry(theta, q);
+        }
         let q = self.map(q);
-        self.push_gate(rotation_gate("ry", Double(theta), [Qubit(q)]));
+        self.push_gate(rotation_gate("ry", theta, [Qubit(q)]));
     }
 
     fn ryy(&mut self, theta: f64, q0: usize, q1: usize) {
-        self.sparse_sim.ryy(theta, q0, q1);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.ryy(theta, q0, q1);
+        }
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.push_gate(rotation_gate("ryy", Double(theta), [Qubit(q0), Qubit(q1)]));
+        self.push_gate(rotation_gate("ryy", theta, [Qubit(q0), Qubit(q1)]));
     }
 
     fn rz(&mut self, theta: f64, q: usize) {
-        self.sparse_sim.rz(theta, q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.rz(theta, q);
+        }
         let q = self.map(q);
-        self.push_gate(rotation_gate("rz", Double(theta), [Qubit(q)]));
+        self.push_gate(rotation_gate("rz", theta, [Qubit(q)]));
     }
 
     fn rzz(&mut self, theta: f64, q0: usize, q1: usize) {
-        self.sparse_sim.rzz(theta, q0, q1);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.rzz(theta, q0, q1);
+        }
         let q0 = self.map(q0);
         let q1 = self.map(q1);
-        self.push_gate(rotation_gate("rzz", Double(theta), [Qubit(q0), Qubit(q1)]));
+        self.push_gate(rotation_gate("rzz", theta, [Qubit(q0), Qubit(q1)]));
     }
 
     fn sadj(&mut self, q: usize) {
-        self.sparse_sim.sadj(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.sadj(q);
+        }
         let q = self.map(q);
         self.push_gate(adjoint_gate("S", [Qubit(q)]));
     }
 
     fn s(&mut self, q: usize) {
-        self.sparse_sim.s(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.s(q);
+        }
         let q = self.map(q);
         self.push_gate(gate("S", [Qubit(q)]));
     }
 
     fn swap(&mut self, q0: usize, q1: usize) {
-        self.sparse_sim.swap(q0, q1);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.swap(q0, q1);
+        }
         let q0 = self.map(q0);
         let q1 = self.map(q1);
         self.push_gate(gate("SWAP", [Qubit(q0), Qubit(q1)]));
     }
 
     fn tadj(&mut self, q: usize) {
-        self.sparse_sim.tadj(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.tadj(q);
+        }
         let q = self.map(q);
         self.push_gate(adjoint_gate("T", [Qubit(q)]));
     }
 
     fn t(&mut self, q: usize) {
-        self.sparse_sim.t(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.t(q);
+        }
         let q = self.map(q);
         self.push_gate(gate("T", [Qubit(q)]));
     }
 
     fn x(&mut self, q: usize) {
-        self.sparse_sim.x(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.x(q);
+        }
         let q = self.map(q);
         self.push_gate(gate("X", [Qubit(q)]));
     }
 
     fn y(&mut self, q: usize) {
-        self.sparse_sim.y(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.y(q);
+        }
         let q = self.map(q);
         self.push_gate(gate("Y", [Qubit(q)]));
     }
 
     fn z(&mut self, q: usize) {
-        self.sparse_sim.z(q);
+        if let Some(ref mut s) = self.sparse_sim {
+            s.z(q);
+        }
         let q = self.map(q);
         self.push_gate(gate("Z", [Qubit(q)]));
     }
 
     fn qubit_allocate(&mut self) -> usize {
-        let id = self.sparse_sim.qubit_allocate();
-        // let id = self.next_qubit_id;
-        // self.next_qubit_id += 1;
+        let id = if let Some(ref mut s) = self.sparse_sim {
+            s.qubit_allocate()
+        } else {
+            let id = self.next_qubit_id;
+            self.next_qubit_id += 1;
+            id
+        };
         let _ = self.map(id);
-        info!("allocated qubit ${id}");
+        debug!("allocated qubit ${id}");
         id
     }
 
     fn qubit_release(&mut self, q: usize) {
-        info!("releasing qubit ${q}");
-        self.sparse_sim.qubit_release(q);
-        // self.next_qubit_id -= 1;
+        debug!("releasing qubit ${q}");
+        if let Some(ref mut s) = self.sparse_sim {
+            s.qubit_release(q);
+        } else {
+            self.next_qubit_id -= 1;
+        }
     }
 
     fn capture_quantum_state(&mut self) -> (Vec<(BigUint, Complex<f64>)>, usize) {
-        if self.show_state_dumps {
-            let (state, qubit_count) = self.sparse_sim.capture_quantum_state();
+        if self.config.show_state_dumps {
+            let sparse_sim = self
+                .sparse_sim
+                .as_mut()
+                .expect("sparse simulator should be initialized");
+
+            let (state, qubit_count) = sparse_sim.capture_quantum_state();
 
             let mut st = String::new();
             writeln!(st, "STATE:\n").expect("string write should succeed");
@@ -710,19 +829,3 @@ struct Result(usize);
 //         write!(f, "RESULT{}", self.0)
 //     }
 // }
-
-#[derive(Copy, Clone)]
-struct Double(f64);
-
-impl Display for Double {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let v = self.0;
-        if (v.floor() - v.ceil()).abs() < f64::EPSILON {
-            // The value is a whole number, which requires at least one decimal point
-            // to differentiate it from an integer value.
-            write!(f, "double {v:.1}")
-        } else {
-            write!(f, "double {v}")
-        }
-    }
-}

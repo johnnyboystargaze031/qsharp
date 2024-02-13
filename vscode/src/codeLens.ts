@@ -66,7 +66,7 @@ function mapCodeLens(cl: ICodeLens): vscode.CodeLens {
   return new vscode.CodeLens(toVscodeRange(cl.range), {
     title,
     command,
-    arguments: cl.args,
+    arguments: [cl.args],
     tooltip,
   });
 }

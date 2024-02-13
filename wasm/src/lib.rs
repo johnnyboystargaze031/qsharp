@@ -3,7 +3,7 @@
 
 #![allow(non_snake_case)]
 
-use diagnostic::VSDiagnostic;
+use diagnostic::{interpret_errors_into_vs_diagnostics, VSDiagnostic};
 use katas::check_solution;
 use num_bigint::BigUint;
 use num_complex::Complex64;
@@ -20,6 +20,7 @@ use qsc::{
 };
 use qsc_codegen::qir_base::generate_qir;
 use resource_estimator::{self as re, estimate_entry};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{fmt::Write, sync::Arc};
 use wasm_bindgen::prelude::*;
@@ -118,40 +119,89 @@ pub fn get_estimates(sources: Vec<js_sys::Array>, params: &str) -> Result<String
     })
 }
 
+serializable_type! {
+    CircuitConfig,
+    {
+        pub boxConditionals: bool,
+        pub boxOperations: bool,
+        pub maxDepth: usize,
+        pub qubitReuse: bool,
+        pub showStateDumps: bool,
+    },
+    r#"export interface ICircuitConfig {
+        boxConditionals: boolean;
+        boxOperations: boolean;
+        maxDepth: number;
+        qubitReuse: boolean;
+        showStateDumps: boolean;
+    }
+    "#,
+    ICircuitConfig
+}
+
 #[wasm_bindgen]
 pub fn get_circuit(
     sources: Vec<js_sys::Array>,
     entry: Option<String>,
-    box_conditionals: bool,
-    box_operations: bool,
-    qubit_reuse: bool,
-    show_state_dumps: bool,
+    config: ICircuitConfig,
 ) -> Result<String, String> {
     let sources = get_source_map(sources, entry);
 
-    let mut interpreter = interpret::Interpreter::new(
-        true,
-        sources,
-        PackageType::Exe,
-        if qubit_reuse {
-            Profile::Unrestricted.into()
-        } else {
-            Profile::Base.into()
-        },
-    )
-    .map_err(|e| e[0].to_string())?;
+    let mut interpreter =
+        interpret::Interpreter::new(true, sources, PackageType::Exe, Profile::Base.into())
+            .map_err(interpret_errors_into_vs_diagnostics_json)?;
+
+    let config: CircuitConfig = config.into();
 
     let circuit = interpreter
         .circuit(
-            box_conditionals,
-            box_operations,
-            qubit_reuse,
-            show_state_dumps,
+            interpret::CircuitConfig {
+                box_conditionals: config.boxConditionals,
+                box_operations: config.boxOperations,
+                max_depth: config.maxDepth,
+                qubit_reuse: config.qubitReuse,
+                show_state_dumps: config.showStateDumps,
+            },
             None,
         )
-        .map_err(|e| e.into_iter().map(|e| e.to_string()).collect::<String>())?;
+        .map_err(interpret_errors_into_vs_diagnostics_json)?;
 
     serde_json::to_string(&circuit).map_err(|e| e.to_string())
+}
+
+#[wasm_bindgen]
+pub fn get_circuit_evolution(
+    sources: Vec<js_sys::Array>,
+    config: ICircuitConfig,
+    iterations: usize,
+) -> Result<String, String> {
+    let sources = get_source_map(sources, None);
+
+    let mut interpreter =
+        interpret::Interpreter::new(true, sources, PackageType::Exe, Profile::Base.into())
+            .map_err(interpret_errors_into_vs_diagnostics_json)?;
+
+    let config: CircuitConfig = config.into();
+
+    let circuit = interpreter
+        .circuit_evolution(
+            interpret::CircuitConfig {
+                box_conditionals: config.boxConditionals,
+                box_operations: config.boxOperations,
+                max_depth: config.maxDepth,
+                qubit_reuse: config.qubitReuse,
+                show_state_dumps: config.showStateDumps,
+            },
+            iterations,
+        )
+        .map_err(interpret_errors_into_vs_diagnostics_json)?;
+
+    serde_json::to_string(&circuit).map_err(|e| e.to_string())
+}
+
+fn interpret_errors_into_vs_diagnostics_json(errs: Vec<qsc::interpret::Error>) -> String {
+    serde_json::to_string(&interpret_errors_into_vs_diagnostics(&errs))
+        .expect("serializing errors to json should succeed (or should it?)")
 }
 
 #[wasm_bindgen]

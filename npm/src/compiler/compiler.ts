@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { type VSDiagnostic } from "../../lib/web/qsc_wasm.js";
+import { ICircuitConfig, type VSDiagnostic } from "../../lib/web/qsc_wasm.js";
 import { log } from "../log.js";
 import { IServiceProxy, ServiceState } from "../worker-proxy.js";
 import { eventStringToMsg } from "./common.js";
@@ -27,11 +27,15 @@ export interface ICompiler {
   getCircuit(
     sources: [string, string][],
     expr: string,
-    boxConditionals: boolean,
-    boxOperations: boolean,
-    qubitReuse: boolean,
-    showStateDumps: boolean,
+    config: ICircuitConfig,
   ): Promise<object>;
+
+  getCircuitEvolution(
+    sources: [string, string][],
+    config: ICircuitConfig,
+    iterations: number,
+  ): Promise<object[]>;
+
   checkExerciseSolution(
     user_code: string,
     exercise_sources: string[],
@@ -88,20 +92,18 @@ export class Compiler implements ICompiler {
   async getCircuit(
     sources: [string, string][],
     expr: string,
-    boxConditionals: boolean,
-    boxOperations: boolean,
-    qubitReuse: boolean,
-    showStateDumps: boolean,
+    config: ICircuitConfig,
   ): Promise<object> {
+    return JSON.parse(this.wasm.get_circuit(sources, expr, config));
+  }
+
+  async getCircuitEvolution(
+    sources: [string, string][],
+    config: ICircuitConfig,
+    iterations: number,
+  ): Promise<object[]> {
     return JSON.parse(
-      this.wasm.get_circuit(
-        sources,
-        expr,
-        boxConditionals,
-        boxOperations,
-        qubitReuse,
-        showStateDumps,
-      ),
+      this.wasm.get_circuit_evolution(sources, config, iterations),
     );
   }
 

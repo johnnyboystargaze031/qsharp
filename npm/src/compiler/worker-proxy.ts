@@ -18,6 +18,7 @@ const requests: MethodMap<ICompiler> = {
   getQir: "request",
   getEstimates: "request",
   getCircuit: "request",
+  getCircuitEvolution: "request",
   run: "requestWithProgress",
   checkExerciseSolution: "requestWithProgress",
 };

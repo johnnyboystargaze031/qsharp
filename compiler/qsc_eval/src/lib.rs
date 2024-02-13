@@ -217,33 +217,6 @@ pub fn eval(
     Ok(value)
 }
 
-/// Evaluates the given code with the given context.
-/// # Errors
-/// Returns the first error encountered during execution.
-/// # Panics
-/// On internal error where no result is returned.
-#[allow(clippy::too_many_arguments)]
-pub fn eval_take_state(
-    package: PackageId,
-    seed: Option<u64>,
-    id: EvalId,
-    globals: &impl PackageStoreLookup,
-    env: &mut Env,
-    sim: &mut impl Backend<ResultType = impl Into<val::Result>>,
-    receiver: &mut impl Receiver,
-) -> Result<Value, (Error, Vec<Frame>)> {
-    let mut state = State::new(package, seed);
-    match id {
-        EvalId::Expr(expr) => state.push_expr(expr),
-        EvalId::Stmt(stmt) => state.push_stmt(stmt),
-    }
-    let res = state.eval(globals, env, sim, receiver, &[], StepAction::Continue)?;
-    let StepResult::Return(value) = res else {
-        panic!("eval should always return a value");
-    };
-    Ok(value)
-}
-
 /// The type of step action to take during evaluation
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum StepAction {

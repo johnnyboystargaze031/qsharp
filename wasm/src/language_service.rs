@@ -272,9 +272,14 @@ impl LanguageService {
                 let range = lens.range.into();
                 let (command, args) = match lens.command {
                     qsls::protocol::CodeLensKind::Circuit => ("circuit", None),
-                    qsls::protocol::CodeLensKind::OperationCircuit(namespace, name, decl) => {
-                        ("operationCircuit", Some((namespace, name, decl)))
-                    }
+                    qsls::protocol::CodeLensKind::OperationCircuit(args) => (
+                        "operationCircuit",
+                        Some(OperationCircuitParams {
+                            namespace: args.namespace,
+                            name: args.name,
+                            args: args.args,
+                        }),
+                    ),
                     qsls::protocol::CodeLensKind::Histogram => ("histogram", None),
                     qsls::protocol::CodeLensKind::Debug => ("debug", None),
                     qsls::protocol::CodeLensKind::Run => ("run", None),
@@ -415,14 +420,29 @@ serializable_type! {
         range: Range,
         command: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        args: Option<(String, String, String)>,
+        args: Option<OperationCircuitParams>,
     },
     r#"export interface ICodeLens {
         range: IRange;
         command: "histogram" | "estimate" | "circuit" | "operationCircuit" | "debug" | "run";
-        args?: [string, string, string];
+        args?: IOperationCircuitParams;
     }"#,
     ICodeLens
+}
+
+serializable_type! {
+    OperationCircuitParams,
+    {
+        namespace: String,
+        name: String,
+        args: Vec<usize>,
+    },
+    r#"export interface IOperationCircuitParams {
+        namespace: string;
+        name: string;
+        args: number[];
+    }"#,
+    IOperationCircuitParams
 }
 
 serializable_type! {

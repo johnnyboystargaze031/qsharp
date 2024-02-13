@@ -16,6 +16,7 @@ use qsc_eval::{
 use qsc_frontend::compile::{RuntimeCapabilityFlags, SourceContents, SourceMap, SourceName};
 use qsc_passes::PackageType;
 use qsc_project::{FileSystem, Manifest, StdFs};
+use qsc_vis::Config;
 use std::{
     fs,
     io::{self, prelude::BufRead, Write},
@@ -43,6 +44,14 @@ struct Cli {
     /// Exit after loading the files or running the given file(s)/entry on the command line.
     #[arg(long)]
     exec: bool,
+
+    /// Generate circuit
+    #[arg(long)]
+    circuit: bool,
+
+    /// Iterations
+    #[arg(long)]
+    i: Option<usize>,
 
     /// Path to a Q# manifest for a project
     #[arg(short, long)]
@@ -108,6 +117,40 @@ fn main() -> miette::Result<ExitCode> {
         return Ok(print_exec_result(
             interpreter.eval_entry(&mut TerminalReceiver),
         ));
+    } else if cli.circuit {
+        let mut interpreter = match Interpreter::new(
+            !cli.nostdlib,
+            SourceMap::new(sources, cli.entry.map(std::convert::Into::into)),
+            PackageType::Exe,
+            RuntimeCapabilityFlags::empty(),
+        ) {
+            Ok(interpreter) => interpreter,
+            Err(errors) => {
+                for error in errors {
+                    eprintln!("error: {:?}", Report::new(error));
+                }
+                return Ok(ExitCode::FAILURE);
+            }
+        };
+
+        return Ok(
+            match interpreter.circuit_evolution(Config::default(), cli.i.unwrap_or(100)) {
+                Ok(value) => {
+                    println!("{value:?}");
+                    ExitCode::SUCCESS
+                }
+                Err(errors) => {
+                    for error in errors {
+                        if let Some(stack_trace) = error.stack_trace() {
+                            eprintln!("{stack_trace}");
+                        }
+                        let report = Report::new(error);
+                        eprintln!("error: {report:?}");
+                    }
+                    ExitCode::FAILURE
+                }
+            },
+        );
     }
 
     let mut interpreter = match Interpreter::new(

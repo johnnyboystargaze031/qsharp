@@ -1,11 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::sync::Arc;
-
 use crate::{
     compilation::Compilation,
-    protocol::{CodeLens, CodeLensKind},
+    protocol::{CodeLens, CodeLensKind, OperationCircuitParams},
     qsc_utils::into_range,
 };
 use qsc::{
@@ -17,6 +15,7 @@ use qsc::{
     line_column::Encoding,
     SourceMap, Span,
 };
+use std::vec;
 
 pub(crate) fn get_code_lenses(
     compilation: &Compilation,
@@ -38,7 +37,6 @@ pub(crate) fn get_code_lenses(
         },
         position_encoding,
         source_map: &user_unit.sources,
-        source_contents: source.contents.clone(),
         code_lenses: Vec::new(),
         package: user_hir_package,
     };
@@ -51,7 +49,6 @@ struct CodeLensBuilder<'a> {
     position_encoding: Encoding,
     source_map: &'a SourceMap,
     code_lenses: Vec<CodeLens>,
-    source_contents: Arc<str>,
     package: &'a Package,
 }
 
@@ -106,24 +103,46 @@ impl CodeLensBuilder<'_> {
                     command: CodeLensKind::Debug,
                 },
             ]);
-        } else if takes_qubit_array(&decl.input.ty) {
-            self.code_lenses.push(CodeLens {
-                range,
-                command: CodeLensKind::OperationCircuit(
-                    namespace.into(),
-                    decl.name.name.to_string(),
-                    self.source_contents[decl.span.lo as usize..decl.span.hi as usize].into(),
-                ),
-            });
+        } else {
+            let qubit_arg_dimensions = qubit_arg_dimensions(&decl.input.ty);
+            if !qubit_arg_dimensions.is_empty() {
+                self.code_lenses.push(CodeLens {
+                    range,
+                    command: CodeLensKind::OperationCircuit(OperationCircuitParams {
+                        namespace: namespace.into(),
+                        name: decl.name.name.to_string(),
+                        args: qubit_arg_dimensions,
+                    }),
+                });
+            }
         }
     }
 }
 
-fn takes_qubit_array(input: &Ty) -> bool {
-    if let Ty::Array(ty) = input {
-        if let Ty::Prim(Prim::Qubit) = ty.as_ref() {
-            return true;
+fn qubit_arg_dimensions(input: &Ty) -> Vec<usize> {
+    match input {
+        Ty::Array(ty) => {
+            if let Some(s) = get_array_dimension(ty) {
+                return vec![s + 1];
+            }
         }
+        Ty::Prim(Prim::Qubit) => return vec![0],
+        Ty::Tuple(tys) => {
+            let params = tys.iter().map(get_array_dimension).collect::<Vec<_>>();
+
+            if params.iter().all(Option::is_some) {
+                return params.into_iter().map(Option::unwrap).collect();
+            }
+        }
+        _ => {}
     }
-    false
+    vec![]
+}
+
+fn get_array_dimension(input: &Ty) -> Option<usize> {
+    match input {
+        Ty::Prim(Prim::Qubit) => Some(0),
+        Ty::Array(ty) => get_array_dimension(ty).map(|d| d + 1),
+        _ => None,
+    }
 }

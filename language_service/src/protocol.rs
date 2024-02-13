@@ -135,9 +135,16 @@ pub struct CodeLens {
 #[derive(Debug)]
 pub enum CodeLensKind {
     Circuit,
-    OperationCircuit(String, String, String), // namespace, operation name, operation declaration
+    OperationCircuit(OperationCircuitParams),
     Histogram,
     Debug,
     Run,
     Estimate,
+}
+
+#[derive(Debug)]
+pub struct OperationCircuitParams {
+    pub namespace: String,
+    pub name: String,
+    pub args: Vec<usize>, // dimensions
 }

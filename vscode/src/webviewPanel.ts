@@ -21,6 +21,10 @@ import { isQsharpDocument } from "./common";
 import { loadProject } from "./projectSystem";
 import { EventType, sendTelemetryEvent } from "./telemetry";
 import { getRandomGuid } from "./utils";
+import type {
+  ICircuitConfig,
+  IOperationCircuitParams,
+} from "../../npm/lib/web/qsc_wasm";
 
 const QSharpWebViewType = "qsharp-webview";
 const compilerRunTimeoutMs = 1000 * 60 * 5; // 5 minutes
@@ -362,11 +366,7 @@ export function registerWebViewCommands(context: ExtensionContext) {
   context.subscriptions.push(
     commands.registerCommand(
       "qsharp-vscode.showCircuit",
-      async (
-        operationNamespace?: string,
-        operationName?: string,
-        operationDecl?: string,
-      ) => {
+      async (operationArgs?: IOperationCircuitParams) => {
         const editor = window.activeTextEditor;
         if (!editor || !isQsharpDocument(editor.document)) {
           throw new Error("The currently active window is not a Q# file");
@@ -375,6 +375,7 @@ export function registerWebViewCommands(context: ExtensionContext) {
         // Start the worker, run the code, and send the results to the webview
         const worker = getCompilerWorker(compilerWorkerScriptPath);
         const compilerTimeout = setTimeout(() => {
+          log.info("terminating circuit worker due to timeout");
           worker.terminate(); // Confirm: Does the 'terminate' in the finally below error if this happens?
         }, compilerRunTimeoutMs);
         try {
@@ -383,86 +384,161 @@ export function registerWebViewCommands(context: ExtensionContext) {
           const maybeConfig = editor.document.lineAt(0).text;
           const magic = "// circuit ";
 
-          let boxConditionals = false;
-          let boxOperations = false;
+          const circuitConfig: ICircuitConfig = {
+            boxConditionals: false,
+            boxOperations: false,
+            qubitReuse: false,
+            showStateDumps: false,
+            maxDepth: 3,
+          };
+
           let numQubits = 2;
-          let qubitReuse = false;
-          let stateDumps = false;
+          let evolution = false;
+          let iterations = 1000;
+          let stepTimeMs = 10;
 
           // example comment
-          // circuit { "boxConditionals": false, "boxOperations": false, "numQubits": 2, "qubitReuse": false, "stateDumps": false }
+          // circuit { "boxConditionals": false, "boxOperations": false, "numQubits": 2, "qubitReuse": false, "showStateDumps": false, "evolution": true, "iterations": 10, "stepTimeMs": 1000 }
 
           if (maybeConfig.startsWith(magic)) {
             const config = JSON.parse(maybeConfig.slice(magic.length));
             if (config.boxConditionals !== undefined) {
-              boxConditionals = config.boxConditionals;
+              circuitConfig.boxConditionals = config.boxConditionals;
             }
             if (config.boxOperations !== undefined) {
-              boxOperations = config.boxOperations;
+              circuitConfig.boxOperations = config.boxOperations;
+            }
+            if (config.qubitReuse !== undefined) {
+              circuitConfig.qubitReuse = config.qubitReuse;
+            }
+            if (config.showStateDumps !== undefined) {
+              circuitConfig.showStateDumps = config.showStateDumps;
+            }
+            if (config.maxDepth !== undefined) {
+              circuitConfig.maxDepth = config.maxDepth;
             }
             if (config.numQubits !== undefined) {
               numQubits = config.numQubits;
             }
-            if (config.qubitReuse !== undefined) {
-              qubitReuse = config.qubitReuse;
+            if (config.evolution !== undefined) {
+              evolution = config.evolution;
             }
-            if (config.stateDumps !== undefined) {
-              stateDumps = config.stateDumps;
+            if (config.iterations !== undefined) {
+              iterations = config.iterations;
+            }
+            if (config.stepTimeMs !== undefined) {
+              stepTimeMs = config.stepTimeMs;
             }
           }
 
           log.info(
-            `generating circuit, boxConditionals: ${boxConditionals}, boxOperations: ${boxOperations}, numQubits: ${numQubits}, qubitReuse: ${qubitReuse} stateDumps: ${stateDumps}`,
+            `generating circuit, config: ${JSON.stringify(circuitConfig)}`,
           );
 
           let circuit;
           let title;
           const sources = await loadProject(editor.document.uri);
-          if (operationNamespace && operationName && operationDecl) {
+          if (operationArgs) {
+            let totalInputQubitsInCircuit = 0;
+            let argDecls = "";
+            let callParams = "";
+            let resets = "";
+            let i = 0;
+            for (const dim of operationArgs.args) {
+              if (dim === 0) {
+                argDecls += `use q${i} = Qubit();\n`;
+                resets += `Reset(q${i});\n`;
+                totalInputQubitsInCircuit++;
+              } else {
+                const totalQubits = Math.pow(numQubits, dim);
+                totalInputQubitsInCircuit += totalQubits;
+
+                argDecls += `use _q${i} = Qubit[${totalQubits}];\n`;
+                if (dim === 1) {
+                  argDecls += `let q${i} = _q${i};\n`;
+                }
+                for (let j = 1; j < dim; j++) {
+                  // call chunks for multidimensional arrays
+                  argDecls += `let q${i} = Microsoft.Quantum.Arrays.Chunks(${numQubits}, _q${i});\n`;
+                }
+                resets += `ResetAll(_q${i});\n`;
+              }
+              callParams += `q${i}`;
+              if (i < operationArgs.args.length - 1) {
+                callParams += ", ";
+              }
+              i++;
+            }
+
             const code = `
-namespace ${operationNamespace} {
-  operation _Invoke_${operationName}() : Result[] {
-    use qubits = Qubit[${numQubits}];
-    ${operationNamespace}.${operationName}(qubits);
-    ResetAll(qubits);
+namespace ${operationArgs.namespace} {
+  operation _Invoke_${operationArgs.name}() : Result[] {
+    ${argDecls}
+    ${operationArgs.namespace}.${operationArgs.name}(${callParams});
+    ${resets};
     return [];
   }
 }`;
+            log.debug(`calling code: \n ${code}`);
             sources.push(["<circuit_generation>", code]);
             circuit = await worker.getCircuit(
               sources,
-              `${operationNamespace}._Invoke_${operationName}()`,
-              boxConditionals,
-              boxOperations,
-              qubitReuse,
-              stateDumps,
+              `${operationArgs.namespace}._Invoke_${operationArgs.name}()`,
+              circuitConfig,
             );
-            title = `${operationName} with ${numQubits} input qubits`;
+            title = `${operationArgs.name} with ${totalInputQubitsInCircuit} input qubits`;
           } else {
-            circuit = await worker.getCircuit(
-              sources,
-              "",
-              boxConditionals,
-              boxOperations,
-              qubitReuse,
-              stateDumps,
-            );
+            circuit = evolution
+              ? await worker.getCircuitEvolution(
+                  sources,
+                  circuitConfig,
+                  iterations,
+                )
+              : await worker.getCircuit(sources, "", circuitConfig);
             title = editor.document.uri.path.split("/").pop() || "Circuit";
           }
 
-          log.info("generating circuit " + JSON.stringify(circuit));
-
-          const message = {
-            command: "circuit",
-            circuit,
-            title,
-          };
-          sendMessageToPanel("circuit", false, message);
           clearTimeout(compilerTimeout);
+          if (!operationArgs && evolution) {
+            const minRefreshIntervalMs = 200;
+            const refreshIntervalMs =
+              stepTimeMs > minRefreshIntervalMs
+                ? stepTimeMs
+                : minRefreshIntervalMs;
+            const stepsPerRefresh = refreshIntervalMs / stepTimeMs;
+
+            log.info(
+              `displaying evolution, refreshIntervalMs: ${refreshIntervalMs}, stepsPerRefresh: ${stepsPerRefresh}`,
+            );
+            let i = 0;
+            const allCircuits = circuit as object[];
+            for (const circuitStep of allCircuits) {
+              if (i++ % stepsPerRefresh === 0 || i === allCircuits.length) {
+                const message = {
+                  command: "circuit",
+                  circuit: circuitStep,
+                  title: `${title} Step ${i}`,
+                };
+                sendMessageToPanel("circuit", false, message);
+                await new Promise((resolve) =>
+                  setTimeout(resolve, refreshIntervalMs),
+                );
+              }
+            }
+          } else {
+            log.info(`displaying whole circuit`);
+            const message = {
+              command: "circuit",
+              circuit,
+              title,
+            };
+            sendMessageToPanel("circuit", false, message);
+          }
         } catch (e: any) {
           log.error("Circuit error. ", e.toString());
           throw new Error("Run failed");
         } finally {
+          log.info("terminating circuit worker");
           worker.terminate();
         }
       },
@@ -570,10 +646,10 @@ export class QSharpWebViewPanel {
 
   sendMessage(message: any) {
     if (this._ready) {
-      log.debug("Sending message to webview", message);
+      log.trace("Sending message to webview", message);
       this.panel.webview.postMessage(message);
     } else {
-      log.debug("Queuing message to webview", message);
+      log.trace("Queuing message to webview", message);
       this._queuedMessages.push(message);
     }
   }
