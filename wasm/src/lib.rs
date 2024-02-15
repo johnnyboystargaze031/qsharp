@@ -5,6 +5,7 @@
 
 use diagnostic::VSDiagnostic;
 use katas::check_solution;
+use log::error;
 use num_bigint::BigUint;
 use num_complex::Complex64;
 use project_system::*;
@@ -259,6 +260,14 @@ pub fn run(
     event_cb: &js_sys::Function,
     shots: u32,
 ) -> Result<bool, JsValue> {
+    error!("intentional error!");
+    panic!("intentional panic!");
+
+    let mut v = vec![];
+    for _ in 0..usize::MAX {
+        v.push(1);
+    }
+
     if !event_cb.is_function() {
         return Err(JsError::new("Events callback function must be provided").into());
     }

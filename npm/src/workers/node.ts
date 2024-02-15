@@ -62,7 +62,7 @@ export function createWorker<
  * Creates and initializes a service in a worker thread, and returns a proxy for the service
  * to be used from the main thread.
  *
- * @param workerArg The the URL of the service web worker script.
+ * @param workerArg The the URL of the service web worker script, or code to evaluate in the worker.
  * @param wasmModule The wasm module to initialize the service with
  * @param serviceProtocol An object that describes the service: its constructor, methods and events
  * @returns A proxy object that implements the service interface.
@@ -73,13 +73,26 @@ export function createProxy<
   TService extends ServiceMethods<TService>,
   TServiceEventMsg extends IServiceEventMessage,
 >(
-  workerArg: string,
+  workerArg:
+    | string
+    | {
+        code: string;
+      },
   serviceProtocol: ServiceProtocol<TService, TServiceEventMsg>,
 ): TService & IServiceProxy {
   const thisDir = dirname(fileURLToPath(import.meta.url));
-  const worker = new Worker(join(thisDir, workerArg), {
-    workerData: { qscLogLevel: log.getLogLevel() },
-  });
+  let worker: Worker;
+  if (typeof workerArg === "string") {
+    workerArg = join(thisDir, "worker-node.js");
+    worker = new Worker(join(thisDir, workerArg), {
+      workerData: { qscLogLevel: log.getLogLevel() },
+    });
+  } else {
+    worker = new Worker(workerArg.code, {
+      eval: true,
+      workerData: { qscLogLevel: log.getLogLevel() },
+    });
+  }
 
   // Create the proxy which will forward method calls to the worker
   const proxy = createProxyInternal<TService, TServiceEventMsg>(

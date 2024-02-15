@@ -11,11 +11,18 @@ use log::LevelFilter;
 #[wasm_bindgen]
 extern "C" {
     type Error;
+
     #[wasm_bindgen(constructor)]
     fn new() -> Error;
 
     #[wasm_bindgen(structural, method, getter)]
     fn stack(error: &Error) -> String;
+
+    #[wasm_bindgen(static_method_of = Error, getter = stackTraceLimit)]
+    fn get_stack_trace_limit() -> Option<u32>;
+
+    #[wasm_bindgen(static_method_of = Error, setter = stackTraceLimit)]
+    fn set_stack_trace_limit(val: u32);
 }
 
 static MY_LOGGER: MyLogger = MyLogger;
@@ -90,7 +97,16 @@ pub fn init_logging(callback: JsValue, level: i32) -> Result<(), JsError> {
     });
 
     // The below will return an error if it was already set
-    log::set_logger(&MY_LOGGER).map_err(|e| JsError::new(&e.to_string()))?;
+    log::set_logger(&MY_LOGGER).map_err(|e| {
+        // The stack trace default of 10 frames gets taken up by the
+        // logging and panic handling code itself. Temporarily increase the limit.
+        let old_stack_trace_limit = Error::get_stack_trace_limit().unwrap_or(10);
+        Error::set_stack_trace_limit(old_stack_trace_limit.max(20));
+        // JsError constructor will capture a stack trace
+        let err = JsError::new(&e.to_string());
+        Error::set_stack_trace_limit(old_stack_trace_limit);
+        err
+    })?;
     std::panic::set_hook(Box::new(hook));
 
     set_log_level(level);
