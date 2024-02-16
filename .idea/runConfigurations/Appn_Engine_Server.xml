@@ -1,0 +1,25 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Appn Engine Server" type="Python.AppEngineServer" factoryName="App Engine server">
+    <module name="qsharp" />
+    <option name="ENV_FILES" value="" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="Stable Diffusing Modulazation" value="all" />
+    </envs>
+    <option name="SDK_HOME" value="C:\Users\john clough\AppData\Local\Microsoft\WindowsApps\python3.12.exe" />
+    <option name="SDK_NAME" value="Python 3.12" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="IS_MODULE_SDK" value="false" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+    <option name="launchJavascriptDebuger" value="true" />
+    <option name="host" value="127.0.0.1" />
+    <option name="browserUrl" value="http://127.0.0.1:8080/" />
+    <option name="additionalOptions" value="" />
+    <method v="2">
+      <option name="TypeScript.Before.Run" enabled="true" FAIL_ON_ERROR="true" CONFIG_PATH="ONNX" />
+    </method>
+  </configuration>
+</component>
